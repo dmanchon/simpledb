@@ -1,0 +1,30 @@
+[
+  {
+    "label": "Build Project",
+    "command": "cmake -B build && cmake --build build",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "Run Tests",
+    "command": "ctest --test-dir build --output-on-failure",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "Build & Run Tests",
+    "command": "cmake -B build && cmake --build build && ctest --test-dir build --output-on-failure",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "Run CLI Executable",
+    "command": "./build/simpledb",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+]

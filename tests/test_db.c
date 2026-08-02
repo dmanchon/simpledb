@@ -21,6 +21,7 @@ static void test_allocator(void) {
     for (int i = 0; i < 1000; i++) {
         bool ok = buffer_i32_push(buf, i * 10);
         assert(ok);
+        (void)ok;
     }
 
     assert(buf->size == 1000);
@@ -35,6 +36,7 @@ static void test_slices(void) {
     slice_i32_t null_slice = slice_of((int32_t*)NULL, 3);
     assert(null_slice.data == NULL);
     assert(null_slice.len == 3);
+    (void)null_slice;
 
     // 2. Test buffer conversion & element lookup
     buffer_i32_t* buf = buffer_i32_create(16);
@@ -46,12 +48,14 @@ static void test_slices(void) {
     assert(s_buf.len == 10);
     assert(slice_i32_at(s_buf, 0) == 100);
     assert(slice_i32_at(s_buf, 4) == 500);
+    (void)s_buf;
 
     // 3. Test O(1) sub-slicing
     slice_i32_t sub = slice_i32_sub(s_buf, 2, 5);
     assert(sub.len == 5);
     assert(slice_i32_at(sub, 0) == 300);
     assert(slice_i32_at(sub, 4) == 700);
+    (void)sub;
 
     // 4. Test C11 _Generic macro dispatch for int32_t vs float arrays
     int32_t raw_i32[] = { 10, 20, 30 };
@@ -62,11 +66,14 @@ static void test_slices(void) {
 
     assert(gen_i32.len == 3 && slice_i32_at(gen_i32, 1) == 20);
     assert(gen_f32.len == 3 && slice_f32_at(gen_f32, 1) == 2.5f);
+    (void)gen_i32;
+    (void)gen_f32;
 
     // 5. Test buffer zero-copy re-interpretation as float slice
     slice_f32_t f32_from_buf = buffer_f32_as_slice(buf);
     assert(f32_from_buf.len == 10);
     assert(f32_from_buf.data != NULL);
+    (void)f32_from_buf;
 
     buffer_i32_free(buf);
 }
@@ -95,6 +102,7 @@ static void test_mmap_file(void) {
     assert(slice_i32_at(slice, 0) == 7);
     assert(slice_i32_at(slice, 49) == 350);
     assert(slice_i32_at(slice, 99) == 700);
+    (void)slice;
 
     // Close and remove file
     mmap_file_close(mfile);

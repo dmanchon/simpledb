@@ -14,7 +14,7 @@ Before writing line 1 of code, it is vital to establish **why** this project exi
 ## 1. Motivations: Why Build a Columnar Engine in Plain C11?
 
 ### A. Demystifying the "Database Black Box"
-$99\%$ of software engineers use databases purely as consumer abstractions (`SELECT * FROM table`). 
+99\% of software engineers use databases purely as consumer abstractions (`SELECT * FROM table`). 
 
 Building an analytical database kernel from scratch in **Plain C11** forces us to confront fundamental low-level mechanics:
 * **Hardware Cache-Line Alignment**: Why 64-byte alignment prevents split cache-line fetches and allows ARM Neon / Intel AVX-512 vector registers to scan data at **40–80 GB/s**.
@@ -54,7 +54,7 @@ Index & Granules   `compress`/`gather`                     Late Materialization 
 
 ### A. ClickHouse & Tinybird
 * **Inspiration**: The **MergeTree** storage engine architecture, **Sparse Primary Indexing (`primary.idx`)**, **8,192-row Granule block partitioning**, and companion **Marks Files (`.mrk`)**.
-* **Lesson**: Indexing blocks of rows (granules) rather than individual rows reduces index memory footprint by **$8,192\times$**, fitting the entire primary index of 1,000,000,000 rows into **2MB of CPU L2/L3 cache**.
+* **Lesson**: Indexing blocks of rows (granules) rather than individual rows reduces index memory footprint by **8,192x**, fitting the entire primary index of 1,000,000,000 rows into **2MB of CPU L2/L3 cache**.
 
 ### B. APL & K/q (Kx Systems / Arthur Whitney)
 * **Inspiration**: Array language vectorized execution primitives (`compress`, `gather`, `group`).

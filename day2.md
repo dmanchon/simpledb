@@ -17,8 +17,8 @@ We construct **Zero-Copy Typed Slices (`slice_i32_t`, `slice_f32_t`)**, **Column
 
 In traditional object-oriented designs, passing data between execution operators often involves allocating vectors, copying buffers, or wrapping arrays in heavy class abstractions.
 
-In a high-throughput columnar database scanning $100,000,000$ rows:
-* **Memory Copying is Unacceptable**: Copying a 100M-row column takes $\sim 400\text{ MB}$ of memory bandwidth and tens of milliseconds of CPU stalls.
+In a high-throughput columnar database scanning 100,000,000 rows:
+* **Memory Copying is Unacceptable**: Copying a 100M-row column takes ~ 400 MB of memory bandwidth and tens of milliseconds of CPU stalls.
 * **Ownership vs. Viewing**: Physical query operators (like SIMD filters, sequence scans, and hash aggregations) only need to **read** data. They should **never own or allocate memory** for input columns.
 
 ```
@@ -44,7 +44,7 @@ typedef struct {
 ```
 
 ### Three Key Advantages of Slices:
-1. **$O(1)$ Sub-Slicing Window**: A sub-range of $1,000,000$ rows can be windowed in **$O(1)$ time and zero allocations** simply by incrementing the pointer (`data + offset`) and setting `len`.
+1. **O(1) Sub-Slicing Window**: A sub-range of 1,000,000 rows can be windowed in **O(1) time and zero allocations** simply by incrementing the pointer (`data + offset`) and setting `len`.
 2. **Unified Data Interface**: Slices work identically whether data originates from an in-memory `buffer_i32_t` or a zero-copy memory-mapped disk file (`mmap`).
 3. **Immutability & Const Safety**: `const int32_t* data` prevents accidental data mutations during read-only query execution.
 
@@ -82,8 +82,8 @@ C11 introduced **`_Generic` expressions**, which evaluate argument types at comp
 | :--- | :--- | :--- |
 | **Ownership** | **Owner** (Manages heap memory lifecycle) | **View** (Non-owning read-only reference) |
 | **Mutability** | **Mutable** (Pushes & 2x capacity growth) | **Immutable** (`const int32_t* data`) |
-| **Pass-by-Value** | Requires pointer (`buffer_i32_t*`) | Direct value ($16\text{--}24\text{ bytes}$, zero allocation) |
-| **Sub-Window** | Requires copying bytes | $O(1)$ pointer increment (`data + offset`) |
+| **Pass-by-Value** | Requires pointer (`buffer_i32_t*`) | Direct value (16--24 bytes, zero allocation) |
+| **Sub-Window** | Requires copying bytes | O(1) pointer increment (`data + offset`) |
 | **Use Case** | Data ingestion & intermediate results | Physical query operators & SIMD kernels |
 
 ---

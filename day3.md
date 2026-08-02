@@ -117,9 +117,9 @@ static inline slice_i32_t mmap_file_as_slice_i32(const mmap_file_t* file) {
 
 | Feature | Standard File I/O (`read` / `fread`) | Zero-Copy `mmap()` |
 | :--- | :--- | :--- |
-| **Data Memory Copies** | **2 Copies** (Disk $\rightarrow$ Page Cache $\rightarrow$ User Buffer) | **0 Copies** (Mapped directly to Virtual Memory) |
+| **Data Memory Copies** | **2 Copies** (Disk → Page Cache → User Buffer) | **0 Copies** (Mapped directly to Virtual Memory) |
 | **System Call Overhead** | **High** (`read()` calls on every chunk) | **Zero** (1 initial `mmap()` syscall) |
-| **RAM Footprint** | **$2\times$ Memory Bloat** (Kernel Cache + Application Heap) | **$1\times$ Minimal Footprint** (Shared Page Cache) |
+| **RAM Footprint** | **2x Memory Bloat** (Kernel Cache + Application Heap) | **1x Minimal Footprint** (Shared Page Cache) |
 | **Slice Interop** | Requires `malloc` + `fread` + `free` | **Instant**: Pointer cast to `slice_i32_t` in 0.00ms |
 | **Page Prefetching** | Manual buffer tuning required | **Automated**: OS hardware prefetching via `madvise` |
 

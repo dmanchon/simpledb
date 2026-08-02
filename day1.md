@@ -29,9 +29,9 @@ When building database kernels, C11 offers distinct mechanical advantages over h
 Modern CPUs do not fetch individual bytes from RAM. They load data in **64-byte blocks** called **Cache Lines**.
 
 Furthermore, modern vector registers operate on wide SIMD lanes:
-* **ARM Neon (Apple Silicon)**: 128-bit registers ($4 \times \text{int32\_t}$).
-* **Intel AVX2**: 256-bit registers ($8 \times \text{int32\_t}$).
-* **Intel AVX-512**: 512-bit registers ($16 \times \text{int32\_t} = \mathbf{64\text{ \textbf{bytes}}}$).
+* **ARM Neon (Apple Silicon)**: 128-bit registers (4 x int32\_t).
+* **Intel AVX2**: 256-bit registers (8 x int32\_t).
+* **Intel AVX-512**: 512-bit registers (16 x int32\_t = 64 \textbf{bytes}).
 
 ```
    Memory Address: 0x1000 (Aligned to 64 bytes)
@@ -43,7 +43,7 @@ Furthermore, modern vector registers operate on wide SIMD lanes:
 ### The Penalty of Unaligned Memory
 If a vector array starts at an unaligned memory address (e.g. `0x1003` instead of `0x1000`):
 1. **Cache-Line Split Penalty**: A single 64-byte SIMD vector load spans across **two physical cache lines**, forcing the memory controller to perform two DRAM fetches instead of one.
-2. **CPU Pipeline Stalls**: Unaligned vector loads cause memory bus locks and pipeline stalls, degrading throughput by $30\%\text{--}50\%$.
+2. **CPU Pipeline Stalls**: Unaligned vector loads cause memory bus locks and pipeline stalls, degrading throughput by 30\%--50\%.
 
 To prevent cache-line splits, every column array in `simpledb` MUST start on a memory address divisible by 64 (`address % 64 == 0`).
 
@@ -103,9 +103,9 @@ Linked List:
 | Architectural Feature | Contiguous Array Buffer (`buffer_i32_t`) | Linked List (`node_t*`) |
 | :--- | :--- | :--- |
 | **Memory Layout** | **100% Contiguous** in RAM | **Scattered / Fragmented** across heap |
-| **CPU Cache Prefetching** | **Optimal**: 1 fetch loads $16 \times \text{int32\_t}$ into L1 cache | **Catastrophic**: Pointer-chasing causes L3/RAM cache misses |
+| **CPU Cache Prefetching** | **Optimal**: 1 fetch loads 16 x int32\_t into L1 cache | **Catastrophic**: Pointer-chasing causes L3/RAM cache misses |
 | **SIMD Vectorization** | **Direct Vector Execution**: 4–16 values calculated per cycle | **IMPOSSIBLE**: Nodes separated by 64-bit pointers |
-| **Memory Overhead** | **0% per-element overhead** ($4\text{ bytes}$ per `int32_t`) | **700% memory bloat** ($4\text{b value} + 8\text{b pointer} + 16\text{b header}$) |
+| **Memory Overhead** | **0% per-element overhead** (4 bytes per `int32_t`) | **700% memory bloat** (4b value + 8b pointer + 16b header) |
 | **Zero-Copy `mmap`** | **Native**: `mmap()` file directly casts to `int32_t*` pointer | **Requires Copying**: Cannot memory-map pointers directly |
 
 ### Why `int32_t` as the Primary Base Type? (Justified by ClickHouse & DuckDB)
@@ -115,8 +115,8 @@ Why start with 32-bit integers (`int32_t`) as our core vector type instead of `v
 Both **DuckDB** and **ClickHouse** use 32-bit integers as their universal indexing and execution foundation:
 1. **DuckDB (`sel_t = uint32_t`)**: Every vector filter and join operation in DuckDB uses `sel_t` (`uint32_t`) selection vectors to index and reorder rows without copying payload bytes ([duckdb/selection_vector.hpp](https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/types/selection_vector.hpp)).
 2. **ClickHouse (`ColumnVector<Int32>`)**: ClickHouse's `ColumnInt32` manages 64-byte aligned SIMD arrays (`PaddedPODArray<Int32>`) for numeric columns and dictionary keys ([src/Columns/ColumnVector.h](https://github.com/ClickHouse/ClickHouse/blob/master/src/Columns/ColumnVector.h)).
-3. **Dictionary Encoding (Text $\rightarrow$ `int32_t`)**: Analytical engines convert variable-length strings into 32-bit integer IDs (`"USA" -> 0, "Canada" -> 1`). String comparisons become ultra-fast SIMD `int32_t` array operations!
-4. **2.14 Billion Row Range**: 32-bit integers cover up to **2.14 Billion rows per table block**, striking the perfect balance between high SIMD parallelism ($16 \times \text{int32\_t}$ per AVX-512 vector register) and memory capacity.
+3. **Dictionary Encoding (Text → `int32_t`)**: Analytical engines convert variable-length strings into 32-bit integer IDs (`"USA" -> 0, "Canada" -> 1`). String comparisons become ultra-fast SIMD `int32_t` array operations!
+4. **2.14 Billion Row Range**: 32-bit integers cover up to **2.14 Billion rows per table block**, striking the perfect balance between high SIMD parallelism (16 x int32\_t per AVX-512 vector register) and memory capacity.
 
 *(Note: On **Day 2**, we generalize our buffer layer with `column_type_t` and `slice_of` (`_Generic`), allowing the engine to handle `float`, `int64_t`, and `double` seamlessly!)*
 
@@ -176,7 +176,7 @@ We verify our implementation with automated C unit tests in [tests/test_db.c](fi
 2. **Dynamic 2x Expansion Test**: Push 1,000+ integers to verify `memcpy` block copying.
 
 ```bash
-$ cmake -B build && cmake --build build && ctest --test-dir build --output-on-failure
+ cmake -B build && cmake --build build && ctest --test-dir build --output-on-failure
 Test project /Users/dmanchon/repos/cdb/build
     Start 1: test_db
 1/1 Test #1: test_db ..........................   Passed    0.36 sec
@@ -189,7 +189,7 @@ Test project /Users/dmanchon/repos/cdb/build
 ## Key Takeaways from Day 1
 
 * **Memory Alignment**: 64-byte alignment prevents CPU cache-line splits and enables peak SIMD register throughput.
-* **Contiguous Memory**: Dynamic contiguous arrays beat linked lists by $7\times$ in memory efficiency and $10\times\text{--}50\times$ in CPU cache speed.
+* **Contiguous Memory**: Dynamic contiguous arrays beat linked lists by 7x in memory efficiency and 10x--50x$ in CPU cache speed.
 * **Code Architecture**: Separate hot inline functions (`buffer_i32_push`) from cold helpers (`buffer_i32_grow`) to keep CPU instruction caches (`I-Cache`) ultra-lean.
 
 *Next up in Day 2: Zero-Copy Typed Slices (`slice_i32_t`) and C11 `_Generic` Macros!*

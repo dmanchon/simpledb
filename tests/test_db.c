@@ -1,6 +1,7 @@
 #include "simpledb/db.h"
 #include "simpledb/allocator.h"
 #include "simpledb/slice.h"
+#include "simpledb/mmap_file.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -70,6 +71,36 @@ static void test_slices(void) {
     buffer_i32_free(buf);
 }
 
+static void test_mmap_file(void) {
+    const char *tmp_filename = "test_column.bin";
+    
+    // Write 100 integers to temporary column file
+    FILE *f = fopen(tmp_filename, "wb");
+    assert(f != NULL);
+    for (int32_t i = 0; i < 100; i++) {
+        int32_t val = (i + 1) * 7;
+        fwrite(&val, sizeof(int32_t), 1, f);
+    }
+    fclose(f);
+
+    // Open via zero-copy mmap
+    mmap_file_t *mfile = mmap_file_open(tmp_filename);
+    assert(mfile != NULL);
+    assert(mfile->size == 100 * sizeof(int32_t));
+    assert(mfile->data != NULL);
+
+    // Convert to typed slice
+    slice_i32_t slice = mmap_file_as_slice_i32(mfile);
+    assert(slice.len == 100);
+    assert(slice_i32_at(slice, 0) == 7);
+    assert(slice_i32_at(slice, 49) == 350);
+    assert(slice_i32_at(slice, 99) == 700);
+
+    // Close and remove file
+    mmap_file_close(mfile);
+    remove(tmp_filename);
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -78,7 +109,8 @@ int main(void) {
 
     test_allocator();
     test_slices();
+    test_mmap_file();
 
-    printf("SUCCESS: All C11 Day 1 & Day 2 tests passed!\n");
+    printf("SUCCESS: All C11 Day 1, Day 2 & Day 3 mmap tests passed!\n");
     return 0;
 }

@@ -119,6 +119,6 @@ int main(void) {
     test_slices();
     test_mmap_file();
 
-    printf("SUCCESS: All C11 Day 1, Day 2 & Day 3 mmap tests passed!\n");
+    printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;
 }

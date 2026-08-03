@@ -1,87 +1,57 @@
-# Building a Database Engine in C11 — Day 0: Motivations & Influences
+# Day 0: Motivations, Technical Inspirations and Architectural Non-Goals
 
-> **Series**: *Building `simpledb` — A High-Performance Columnar Engine in C11*  
-> **Reading Time**: 6 minutes
+Before writing the initial lines of C code for `simpledb`, it is essential to outline the core motivations for the project, its technical ancestry, and the explicit constraints of its design.
 
----
+## 1. Motivations
 
-Welcome to **Day 0** of `simpledb`!
+Most software applications treat database engines as black boxes accessed via high-level query languages. Building a columnar database kernel from scratch in plain C11 provides a clear view into lower-level systems engineering concepts.
 
-Before writing line 1 of code, it is vital to establish **why** this project exists, the **historical & architectural engineering influences** behind it, and what we explicitly **choose NOT to build**.
+### Hardware-Aware Memory Alignment
+Modern SIMD vector registers (ARM Neon, Intel AVX2, AVX-512) require data to be aligned to hardware cache line boundaries. Aligning allocations to 64-byte boundaries prevents split cache-line fetches, enabling memory bandwidth scans of 40 to 80 GB/s.
 
----
+### Zero-Copy Memory Mapping
+Operating system primitives like `mmap` allow binary column files on disk to be mapped directly into user-space virtual memory addresses, bypassing kernel buffer copies and user-space memory allocations.
 
-## 1. Motivations: Why Build a Columnar Engine in Plain C11?
+### Vectorized Execution Primitives
+Structuring data manipulation around array language primitives (compress, gather, group) allows row-by-row iteration to be transformed into tight, branchless vector loops.
 
-### A. Demystifying the "Database Black Box"
-99\% of software engineers use databases purely as consumer abstractions (`SELECT * FROM table`). 
+### C11 Minimalism
+Many C++ database implementations rely on extensive template metaprogramming, complex class hierarchies, and virtual method dispatch. Plain C11 eliminates template bloat, ensures predictable code generation, and gives explicit control over memory layouts and pointer arithmetic.
 
-Building an analytical database kernel from scratch in **Plain C11** forces us to confront fundamental low-level mechanics:
-* **Hardware Cache-Line Alignment**: Why 64-byte alignment prevents split cache-line fetches and allows ARM Neon / Intel AVX-512 vector registers to scan data at **40–80 GB/s**.
-* **Zero-Copy Operating System Mapping**: How `mmap()` maps binary column files directly into CPU pointers, bypassing kernel buffer copies entirely.
-* **Vectorized Execution**: How array language operations (`compress`, `gather`, `group`) transform row-by-row loops into hardware SIMD instructions.
+## 2. Technical Inspirations
 
-### B. C11 Minimalism & Mechanical Sympathy
-Modern C++ database engines often drown in template metaprogramming, complex class hierarchies, and virtual method dispatch (`vtable`) overhead.
-
-By choosing **Plain C11**, we enforce:
-1. **Zero Template & Binary Bloat**: Only code explicitly written is compiled into the binary.
-2. **Explicit Memory Control**: Pointers, contiguous memory buffers (`buffer_i32_t`), and explicit allocation lifecycles.
-3. **Direct Hardware & OS Mapping**: Transparent, predictable code that maps 1-to-1 with CPU machine assembly.
-
----
-
-## 2. Standing on the Shoulders of Giants: Technical Inspirations
-
-The design of `simpledb` draws direct inspiration from four pioneering systems:
+The architecture of `simpledb` draws upon design principles established by four major analytical systems.
 
 ```
-                          ┌───────────────────────────────────────┐
-                          │   `simpledb` Architectural Ancestry   │
-                          └───────────────────┬───────────────────┘
-                                              │
-      ┌──────────────────┬────────────────────┴───────────────────┬──────────────────┐
-      ▼                  ▼                                        ▼                  ▼
-┌───────────┐    ┌───────────────┐                       ┌─────────────────┐  ┌─────────────┐
-│ ClickHouse│    │  APL / K / q  │                       │ DuckDB / C-Store│  │Apache Arrow │
-│ & Tinybird│    │ (Arthur W.)   │                       │  (Stonebraker)  │  │  C Data ABI │
-└─────┬─────┘    └───────┬───────┘                       └────────┬────────┘  └──────┬──────┘
-      │                  │                                        │                  │
-      ▼                  ▼                                        ▼                  ▼
-Sparse Primary      Vector Array                            Zero-Copy Slices,     Zero-Copy
-Index & Granules   `compress`/`gather`                     Late Materialization  Python Export
+                          simpledb Architectural Ancestry
+                                         │
+      ┌──────────────────┬───────────────┴───────────────┬──────────────────┐
+      │                  │                               │                  │
+┌───────────┐    ┌───────────────┐               ┌───────────────┐  ┌─────────────┐
+│ ClickHouse│    │  APL / K / q  │               │    DuckDB     │  │Apache Arrow │
+└─────┬─────┘    └───────┬───────┘               └───────┬───────┘  └──────┬──────┘
+      │                  │                               │                 │
+Sparse Primary      Vector Array                    Zero-Copy Slices  Zero-Copy
+Index & Granules   compress/gather                 Late Materialization Export
 ```
 
-### A. ClickHouse & Tinybird
-* **Inspiration**: The **MergeTree** storage engine architecture, **Sparse Primary Indexing (`primary.idx`)**, **8,192-row Granule block partitioning**, and companion **Marks Files (`.mrk`)**.
-* **Lesson**: Indexing blocks of rows (granules) rather than individual rows reduces index memory footprint by **8,192x**, fitting the entire primary index of 1,000,000,000 rows into **2MB of CPU L2/L3 cache**.
+### ClickHouse
+ClickHouse demonstrates the efficiency of sparse primary indexing. By partitioning data into 8,192-row granules accompanied by mark files, the primary index size is reduced by a factor of 8,192, allowing indexing structures for billion-row tables to fit entirely inside L2 and L3 CPU caches.
 
-### B. APL & K/q (Kx Systems / Arthur Whitney)
-* **Inspiration**: Array language vectorized execution primitives (`compress`, `gather`, `group`).
-* **Lesson**: Data processing is fastest when structured as bulk operations over flat primitive arrays (`int32_t*`) rather than object-oriented row tuples.
+### APL and K/q
+The array programming lineage introduced by Arthur Whitney proves that data processing is fastest when formulated as bulk operations over contiguous primitive vectors (`int32_t*`) rather than object-oriented row tuples.
 
-### C. DuckDB & C-Store Paper (Stonebraker et al., 2005)
-* **Inspiration**: Zero-copy typed slice execution (`slice_i32_t`) and late materialization (delaying row reconstruction until after filtering).
-* **Lesson**: Physical query operators should never allocate memory or copy bytes—they should operate as read-only window views over columnar data.
+### DuckDB
+DuckDB highlights the benefit of zero-copy typed slices and late materialization. Physical query operators act as read-only window views over underlying column buffers without duplicating data during intermediate query steps.
 
-### D. Apache Arrow
-* **Inspiration**: The **Arrow C Data Interface** (`struct ArrowArray` and `struct ArrowSchema`).
-* **Lesson**: Columnar memory buffers should be directly exportable to Python (Pandas/Polars/NumPy) via zero-copy pointer sharing in 0.00ms.
+### Apache Arrow
+Apache Arrow establishes a standardized, language-agnostic C Data Interface. Adopting compatible columnar memory layouts allows database buffers to be exposed to external runtimes like Python, Polars, and NumPy without serialization overhead.
 
----
+## 3. Explicit Non-Goals
 
-## 3. Explicit Non-Goals (What We Choose NOT to Build)
+To maintain a lean implementation targeted under 2,500 lines of C11, `simpledb` intentionally excludes several traditional database subsystems:
 
-To keep `simpledb` laser-focused on hardware SIMD performance and systems learning, we establish strict **Non-Goals**:
-
-* ❌ **NOT a Commercial Production Replacement**: We are not attempting to replace ClickHouse or DuckDB in production.
-* ❌ **NO Full ANSI SQL Parser**: No multi-thousand-line SQL grammar, CTEs, or complex query optimizer. We build a lean, minimal SQL/APL REPL shell.
-* ❌ **NO Heavy ACID / MVCC Transactions**: `simpledb` is designed specifically for high-throughput OLAP (Analytical Append) workloads, not OLTP banking transactions.
-* ❌ **NO Heavy External C++ Dependencies**: 100% pure POSIX C11 code compiling cleanly under `-Wall -Wextra -Wpedantic -Werror`.
-
----
-
-## What's Next?
-
-* **Day 1**: [64-Byte SIMD Memory Alignment & Dynamic Column Buffers](day1.md)
-* **Day 2**: [Zero-Copy Typed Slices & C11 `_Generic` Polymorphism](day2.md)
+- Commercial Production Readiness: The engine is designed as an educational reference implementation for columnar database internals rather than a general-purpose production store.
+- Full ANSI SQL Compliance: The project avoids complex SQL grammar parsers, query planners, and cost-based optimizers in favor of a minimal vector REPL shell.
+- Heavy Transactional Overhead: `simpledb` targets analytical workloads (OLAP) and excludes multi-version concurrency control (MVCC) or heavy ACID logging frameworks required by transactional databases.
+- External C++ Dependencies: The codebase consists of pure POSIX C11, compiling without external third-party dependencies under strict compiler warning flags.

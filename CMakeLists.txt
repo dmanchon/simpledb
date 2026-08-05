@@ -28,6 +28,14 @@ add_executable(simpledb src/main.c)
 target_link_libraries(simpledb PRIVATE simpledb_lib)
 enable_project_warnings(simpledb)
 
+# Standalone Micro-Benchmark Executable Target
+add_executable(bench_db benchmarks/bench_db.c)
+target_link_libraries(bench_db PRIVATE simpledb_lib)
+if(NOT MSVC)
+    target_compile_options(bench_db PRIVATE -O3 -march=native -ffast-math)
+endif()
+enable_project_warnings(bench_db)
+
 # Unit Testing
 enable_testing()
 add_subdirectory(tests)

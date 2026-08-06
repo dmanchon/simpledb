@@ -2,6 +2,7 @@
 #include "simpledb/allocator.h"
 #include "simpledb/slice.h"
 #include "simpledb/mmap_file.h"
+#include "simpledb/filter.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -114,6 +115,40 @@ static void test_mmap_file(void) {
     remove(tmp_filename);
 }
 
+static void test_filter_and_gather(void) {
+    // 1. Create a 1,000-element column slice
+    buffer_i32_t* salary_buf = buffer_i32_create(1000);
+    for (int i = 0; i < 1000; i++) {
+        buffer_i32_push(salary_buf, i * 10); // 0, 10, 20, 30, ... 9990
+    }
+    slice_i32_t salary_slice = buffer_i32_as_slice(salary_buf);
+
+    // 2. Filter rows where salary > 5000 (i.e. i > 500 -> 499 matching rows)
+    selection_vector_t* sel = selection_vector_create(16); // Starts small, tests auto-grow
+    bool filter_ok = filter_gt_i32(salary_slice, 5000, sel);
+    assert(filter_ok);
+    (void)filter_ok;
+
+    assert(sel->size == 499);
+    assert(selection_vector_at(sel, 0) == 501); // Row 501 -> 5010
+    assert(selection_vector_at(sel, 498) == 999); // Row 999 -> 9990
+
+    // 3. Gather selected rows into output buffer
+    buffer_i32_t* gathered_buf = buffer_i32_create(16);
+    bool gather_ok = gather_i32(salary_slice, sel, gathered_buf);
+    assert(gather_ok);
+    (void)gather_ok;
+
+    assert(gathered_buf->size == 499);
+    assert(gathered_buf->data[0] == 5010);
+    assert(gathered_buf->data[498] == 9990);
+
+    // Cleanup
+    buffer_i32_free(salary_buf);
+    selection_vector_free(sel);
+    buffer_i32_free(gathered_buf);
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -123,6 +158,7 @@ int main(void) {
     test_allocator();
     test_slices();
     test_mmap_file();
+    test_filter_and_gather();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

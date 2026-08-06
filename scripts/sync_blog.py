@@ -40,6 +40,13 @@ POST_METADATA = {
         "description": "How optimization flags (-O3 -march=native) and high-resolution POSIX timing (clock_gettime) impact hardware memory bandwidth scanning throughput.",
         "pubDate": "2026-08-02",
         "tags": ["c11", "benchmarking", "optimizations", "posix", "performance"]
+    },
+    "day5.md": {
+        "slug": "day5-column-vectors-and-selection-vectors.md",
+        "title": "Day 5: Column Vectors, Selection Vectors and Branchless Filtering",
+        "description": "How ClickHouse and DuckDB execute query filters without CPU branch mispredictions. Late materialization, selection vectors (sel_t), and zero-copy gather kernels.",
+        "pubDate": "2026-08-03",
+        "tags": ["c11", "selection-vectors", "filtering", "performance", "branchless"]
     }
 }
 
@@ -49,6 +56,7 @@ URL_MAP = {
     "day2.md": "/blog/day2-zero-copy-typed-slices/",
     "day3.md": "/blog/day3-zero-copy-mmap-files/",
     "day4.md": "/blog/day4-build-system-and-benchmarking/",
+    "day5.md": "/blog/day5-column-vectors-and-selection-vectors/",
 }
 
 def clean_latex_math(text):

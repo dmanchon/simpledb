@@ -2,6 +2,8 @@
 
 Analytical database engines like ClickHouse, DuckDB, and MonetDB scan billions of rows per second by aligning memory layouts with hardware cache architecture. In `simpledb`, the foundation begins with 64-byte aligned dynamic column buffers.
 
+---
+
 ## 1. Hardware Cache Lines and Memory Alignment
 
 Modern CPUs do not fetch individual bytes from main memory. Data is transferred into cache hierarchies in 64-byte blocks called cache lines.
@@ -18,9 +20,11 @@ SIMD vector instruction sets operate on wide registers:
    └───────────────────────────────────────────────────────────────┘
 ```
 
-If an array allocation starts at an unaligned memory address, a 64-byte SIMD vector load spans across two physical cache lines. This triggers a cache-line split penalty, forcing the memory controller to issue two DRAM fetches and causing pipeline stalls that reduce scanning throughput by 30% to 50%.
+If an array allocation starts at an unaligned memory address, a 64-byte SIMD vector load spans across two physical cache lines. This triggers a cache-line split penalty, forcing the memory controller to issue two DRAM fetches and causing pipeline stalls that reduce scanning throughput.
 
 To guarantee optimal vector instruction throughput, every column array in `simpledb` is aligned to a 64-byte boundary (`address % 64 == 0`).
+
+---
 
 ## 2. Aligned Allocator Implementation
 
@@ -52,6 +56,8 @@ void aligned_free(void* ptr) {
 }
 ```
 
+---
+
 ## 3. Contiguous Buffers vs. Pointer Layouts
 
 Analytical engines use contiguous dynamic array buffers (`buffer_i32_t`) rather than linked structures or pointer-based objects.
@@ -61,7 +67,7 @@ Contiguous Buffer (buffer_i32_t):
 [ 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 ]  <- 1 Memory Fetch = 16 integers in L1 Cache
 
 Linked List:
-[Node 0] ──> [Node 1] ──> [Node 2] ──> [Node 3]     <- 100ns RAM stall per pointer dereference
+[Node 0] ──> [Node 1] ──> [Node 2] ──> [Node 3]     <- RAM stall per pointer dereference
 ```
 
 | Architectural Feature | Contiguous Array Buffer (`buffer_i32_t`) | Linked List (`node_t*`) |
@@ -69,10 +75,12 @@ Linked List:
 | Memory Layout | 100% Contiguous in RAM | Scattered across heap |
 | CPU Cache Prefetching | Optimal: 1 fetch loads 16 x int32_t into L1 | Pointer-chasing causes L3/RAM misses |
 | SIMD Vectorization | Direct vector execution (4-16 values/cycle) | Impossible due to 64-bit pointer gaps |
-| Memory Overhead | 0% per-element overhead (4 bytes/element) | 700% overhead (value + pointer + header) |
+| Memory Overhead | 0% per-element overhead (4 bytes/element) | High overhead (pointer + metadata bloat) |
 | Zero-Copy mmap | Native: `mmap()` file directly casts to pointer | Requires full copy and pointer swizzling |
 
 32-bit integers (`int32_t`) serve as the baseline primitive type for column vectors. Both DuckDB (`sel_t = uint32_t`) and ClickHouse (`ColumnVector<Int32>`) rely on 32-bit integer representations for selection vectors and dictionary-encoded string columns.
+
+---
 
 ## 4. Hot/Cold Path Separation in Vector Resizing
 

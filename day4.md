@@ -2,6 +2,8 @@
 
 Empirical throughput benchmarking is essential to evaluate columnar hardware scan performance. In `simpledb`, micro-benchmarking relies on POSIX monotonic timers and compiler memory barriers to measure memory scan bandwidth in gigabytes per second (GB/s).
 
+---
+
 ## 1. High-Precision POSIX Monotonic Timers
 
 Standard wall-clock functions like `gettimeofday` are subject to system time adjustments and NTP synchronization, while `clock()` measures total process CPU time rather than elapsed real time.
@@ -37,6 +39,8 @@ static inline void benchmark_report(const char *name, size_t bytes, uint64_t ela
            name, (double)bytes / 1e6, us, seconds, gb_per_sec);
 }
 ```
+
+---
 
 ## 2. Instruction-Level Parallelism and Loop Unrolling
 
@@ -75,13 +79,17 @@ PREVENT_DCE(total_sum);
 
 By decoupling the arithmetic operations into `sum0`, `sum1`, `sum2`, and `sum3`, out-of-order execution pipelines dispatch all four additions concurrently in the same clock cycle.
 
+---
+
 ## 3. Compiler Dead Code Elimination Barriers
 
 When compiling with high optimization flags (`-O3`), compiler passes detect variables that are not written to disk or printed to `stdout`, optimizing away the reduction loop entirely.
 
-Declaring loop accumulators as `volatile` inside the loop body forces memory writes back to stack memory on every iteration, dropping scan throughput to 2.68 GB/s.
+Declaring loop accumulators as `volatile` inside the loop body forces memory writes back to stack memory on every iteration, significantly reducing memory scanning bandwidth.
 
 The `PREVENT_DCE(var)` macro expands to `__asm__ __volatile__("" : : "r"(var))` under GCC and Clang. This signals to the compiler optimizer that `total_sum` is consumed by an assembly block, preserving the vector loop while emitting zero additional machine instructions.
+
+---
 
 ## 4. CMake Compiler Optimization Configuration
 
@@ -95,11 +103,15 @@ if(NOT MSVC)
 endif()
 ```
 
-## 5. Benchmark Performance Matrix (50 Million `int32_t` Elements / 200 MB Buffer)
+---
 
-| Execution Technique | Compiler Flags | 200 MB Scan Time | Memory Throughput |
+## 5. Architectural Execution Characteristics and Optimization Impact
+
+The scanning throughput achieved by a columnar reduction kernel depends directly on compiler optimization flags and memory access patterns.
+
+| Execution Technique | Compiler Flags | Performance Scaling Impact | Dominant Hardware Bottleneck |
 | :- | :- | :- | :- |
-| Volatile Accumulation | `-O3` (Volatile `sum`) | 74.7 ms | 2.68 GB/s (Stack write-back stall) |
-| Standard Loop | `-O2` | 18.2 ms | 10.9 GB/s (RAW dependency latency) |
-| 4-Way Unrolled SIMD | `-O3 -march=native` | 8.6 ms | 23.0 GB/s (8.6x Speedup) |
-| Zero-Copy mmap SIMD | `-O3 -march=native` | 4.2 ms | 47.6 GB/s (17.7x Speedup) |
+| Volatile Accumulation | `-O3` (Volatile `sum`) | Baseline (Slowest) | Stack Write-Back Memory Bus Locks |
+| Standard Scalar Loop | `-O2` | ~4x - 5x Speedup | RAW Loop Addition Latency Chains |
+| 4-Way Unrolled SIMD | `-O3 -march=native` | ~8x - 10x Speedup | Out-of-Order Instruction Dispatch Limits |
+| Zero-Copy mmap SIMD | `-O3 -march=native` | Peak Hardware Speedup | Hardware Bus Bandwidth Limit (~40-80 GB/s) |

@@ -8,7 +8,7 @@
 
 - **Zero Template Overhead**: Built strictly in C11 (`-std=c11`) with zero C++ template metaprogramming, vtables, or header bloat.
 - **64-Byte SIMD Memory Alignment**: Raw aligned memory allocations (`aligned_malloc`) matching 64-byte hardware cache line boundaries (ARM Neon / Intel AVX2 / AVX-512).
-- **ClickHouse-Style Sparse Primary Indexing**: 8,192-row Granule block partitioning with Marks Files (`.mrk`) reducing primary index size by $8,192\times$.
+- **ClickHouse-Style Sparse Primary Indexing**: 8,192-row Granule block partitioning with Marks Files (`.mrk`) reducing primary index size by 8,192x.
 - **APL & K/q Vector Primitives**: Dynamic array buffers (`buffer_i32_t`) executing bulk array operations (`compress`, `sum`, `max`, `gather`, `group`).
 - **Zero-Copy Memory-Mapped Storage**: `mmap` binary file format reading columns directly into memory pointers.
 - **Vectorized SIMD Selection Vectors**: Branchless query filtering generating index selection vectors with 0 CPU branch mispredictions.
@@ -23,7 +23,8 @@
 - **[day1.md](day1.md)** — *Day 1: 64-Byte SIMD Memory Alignment & Dynamic Column Buffers*
 - **[day2.md](day2.md)** — *Day 2: Zero-Copy Typed Slices & C11 `_Generic` Polymorphism*
 - **[day3.md](day3.md)** — *Day 3: Zero-Copy Memory-Mapped Files (`mmap`) & OS Page Cache*
-- **[day4.md](day4.md)** — *Day 4: Vectorized SIMD Selection Vectors & Branchless Query Filtering*
+- **[day4.md](day4.md)** — *Day 4: Build System, Compiler Optimizations & POSIX Micro-Benchmarking*
+- **[day5.md](day5.md)** — *Day 5: Column Vectors, Selection Vectors & Branchless Query Filtering*
 - **[plan.md](plan.md)** — *16-Day Architectural Master Plan, Python Productivization & Distributed Roadmap*
 - **[editor.md](editor.md)** — *Zed & Neovim Editing Shortcut Cheat-Sheet*
 
@@ -40,20 +41,22 @@ cdb/
 ├── day1.md                     # Day 1: 64-Byte SIMD Alignment & Dynamic Buffers
 ├── day2.md                     # Day 2: Zero-Copy Typed Slices & C11 _Generic
 ├── day3.md                     # Day 3: Zero-Copy Memory-Mapped Files (mmap)
-├── day4.md                     # Day 4: Vectorized SIMD Selection Vectors & Branchless Filtering
+├── day4.md                     # Day 4: Build System, Compiler Optimizations & POSIX Benchmarking
+├── day5.md                     # Day 5: Column Vectors, Selection Vectors & Branchless Filtering
 ├── include/
 │   └── simpledb/
 │       ├── allocator.h         # SIMD Allocator & buffer_i32_t header
 │       ├── slice.h             # Zero-copy slices & C11 _Generic macro
 │       ├── mmap_file.h         # Zero-copy mmap file handle header
-│       ├── filter.h            # Selection vector & gather operator header
+│       ├── benchmark.h         # High-resolution benchmark timing & PREVENT_DCE macro
 │       └── db.h                # Database C API header
 ├── src/
 │   ├── allocator.c             # Aligned malloc & buffer_i32_grow implementation
 │   ├── mmap_file.c             # POSIX open, fstat, mmap, madvise implementation
-│   ├── filter.c                # Branchless selection vector & gather kernels
 │   ├── db.c                    # Database core implementation
 │   └── main.c                  # REPL / CLI main executable
+├── benchmarks/
+│   └── bench_db.c              # Standalone hardware scan micro-benchmark suite
 └── tests/
     ├── CMakeLists.txt          # CTest test configuration
     └── test_db.c               # C unit test runner
@@ -76,6 +79,9 @@ cmake --build build
 
 # Run unit tests
 ctest --test-dir build --output-on-failure
+
+# Run standalone benchmark suite
+./build/bench_db
 
 # Run executable CLI
 ./build/simpledb --version

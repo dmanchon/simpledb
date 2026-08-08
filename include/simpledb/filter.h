@@ -32,6 +32,10 @@ static inline int32_t selection_vector_at(const selection_vector_t* sel, size_t 
 // Branchless Filter Kernel: Appends row indices where src[i] > target
 bool filter_gt_i32(slice_i32_t src, int32_t target, selection_vector_t* out_sel);
 
+// Chained Filter Kernel: Filters a column restricted to an existing selection vector
+bool filter_gt_i32_sel(slice_i32_t src, int32_t target, const selection_vector_t* in_sel, selection_vector_t* out_sel);
+
+
 // Branchless Filter Kernel: Appends row indices where src[i] == target
 bool filter_eq_i32(slice_i32_t src, int32_t target, selection_vector_t* out_sel);
 

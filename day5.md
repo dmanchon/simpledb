@@ -170,3 +170,7 @@ Establishing `selection_vector_t` on Day 5 provides the foundational building bl
 **ClickHouse-Style Granule Pruning and Primary Key Marks (Days 9–12)**: When scanning MergeTree storage parts, sparse primary index mark files isolate relevant 8,192-row granules. Selection vectors represent active matching row offsets within granules without allocating intermediate table memory.
 
 **Late Materialization in Projection, Hash Joins and Aggregations (Days 13–16)**: In queries referencing wide tables, the engine evaluates cheap numeric predicates first. Heavy string dictionary attributes and payload columns are gathered only for matching rows at the final query stage, reducing DRAM bandwidth consumption from hundreds of megabytes to a few kilobytes.
+
+---
+
+> **Source Code**: The full C11 codebase for this project is available on GitHub at [dmanchon/simpledb](https://github.com/dmanchon/simpledb).

@@ -378,3 +378,7 @@ The `string_dict_t` built on Day 6 becomes a shared dependency across several su
 **Day 11 — Free-Text Inverted Block Indexing**: For full-text columns that exceed dictionary cardinality (log message bodies, user-generated content), the inverted index replaces dictionary encoding. The Day 6 dictionary lookup infrastructure informs the design of that tokenization and posting-list lookup pipeline.
 
 **Day 15 — APL / K Vectorized Physical Execution Pipeline**: The physical pipeline assembles operators in sequence. `filter_eq_i32` and `filter_gt_i32` are interchangeable filter nodes that both emit `selection_vector_t` outputs, allowing the planner to chain them without knowing whether the underlying column holds numeric data or dictionary keys.
+
+---
+
+> **Source Code**: The full C11 codebase for this project is available on GitHub at [dmanchon/simpledb](https://github.com/dmanchon/simpledb).

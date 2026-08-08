@@ -140,9 +140,22 @@ static void test_filter_and_gather(void) {
     assert(gathered_buf->data[0] == 5010);
     assert(gathered_buf->data[498] == 9990);
 
+    // 4. Test chained filtering (filter_gt_i32_sel)
+    selection_vector_t* sel2 = selection_vector_create(16);
+    // Filter the already selected rows (which are 5010 to 9990). Find rows > 9000.
+    // 5010..9000 is 400 rows. 9010..9990 is 99 rows.
+    bool chained_ok = filter_gt_i32_sel(salary_slice, 9000, sel, sel2);
+    assert(chained_ok);
+    (void)chained_ok;
+    
+    assert(sel2->size == 99);
+    assert(selection_vector_at(sel2, 0) == 901); // Row 901 -> 9010
+    assert(selection_vector_at(sel2, 98) == 999); // Row 999 -> 9990
+
     // Cleanup
     buffer_i32_free(salary_buf);
     selection_vector_free(sel);
+    selection_vector_free(sel2);
     buffer_i32_free(gathered_buf);
 }
 

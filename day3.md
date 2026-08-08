@@ -92,3 +92,7 @@ static inline slice_i32_t mmap_file_as_slice_i32(const mmap_file_t* file) {
 | Memory Footprint | High (Kernel Cache plus User Heap) | Low (Shared kernel page cache) |
 | Slice Conversion | Requires heap allocation and copy | Instant (Pointer cast to `slice_i32_t`) |
 | Page Prefetching | Requires manual buffer management | Automated kernel read-ahead via `madvise` |
+
+---
+
+> **Source Code**: The full C11 codebase for this project is available on GitHub at [dmanchon/simpledb](https://github.com/dmanchon/simpledb).

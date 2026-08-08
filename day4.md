@@ -115,3 +115,7 @@ The scanning throughput achieved by a columnar reduction kernel depends directly
 | Standard Scalar Loop | `-O2` | ~4x - 5x Speedup | RAW Loop Addition Latency Chains |
 | 4-Way Unrolled SIMD | `-O3 -march=native` | ~8x - 10x Speedup | Out-of-Order Instruction Dispatch Limits |
 | Zero-Copy mmap SIMD | `-O3 -march=native` | Peak Hardware Speedup | Hardware Bus Bandwidth Limit (~40-80 GB/s) |
+
+---
+
+> **Source Code**: The full C11 codebase for this project is available on GitHub at [dmanchon/simpledb](https://github.com/dmanchon/simpledb).

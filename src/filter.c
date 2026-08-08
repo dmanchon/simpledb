@@ -21,6 +21,20 @@ bool filter_gt_i32(slice_i32_t src, int32_t target, selection_vector_t *out_sel)
     return true;
 }
 
+bool filter_gt_i32_sel(slice_i32_t src, int32_t target, const selection_vector_t* in_sel, selection_vector_t* out_sel) {
+    if (!src.data || !in_sel || !out_sel) return false;
+
+    buffer_i32_ensure_capacity(out_sel, out_sel->size + in_sel->size);
+
+    for (size_t i = 0; i < in_sel->size; i++) {
+        int32_t row_idx = in_sel->data[i];
+        bool match = src.data[row_idx] > target;
+        out_sel->data[out_sel->size] = row_idx;
+        out_sel->size += match;
+    }
+    return true;
+}
+
 bool gather_i32(slice_i32_t src, const selection_vector_t *sel, buffer_i32_t *out_buf) {
     if (!src.data || !sel || !out_buf)
         return false;

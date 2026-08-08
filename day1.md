@@ -121,3 +121,7 @@ void buffer_i32_grow(buffer_i32_t* buf) {
 ```
 
 By separating `buffer_i32_grow` into a standalone function in `src/allocator.c`, the generated assembly inside `buffer_i32_push` remains compact, allowing CPU instruction caches to hold inner loop bodies without instruction eviction.
+
+---
+
+> **Source Code**: The full C11 codebase for this project is available on GitHub at [dmanchon/simpledb](https://github.com/dmanchon/simpledb).

@@ -122,3 +122,7 @@ static inline int32_t slice_i32_at(slice_i32_t s, size_t idx) {
     const float*:   slice_f32_create((const float*)(PTR), (LEN)) \
 )
 ```
+
+---
+
+> **Source Code**: The full C11 codebase for this project is available on GitHub at [dmanchon/simpledb](https://github.com/dmanchon/simpledb).

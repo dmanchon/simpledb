@@ -172,6 +172,7 @@ void test_string_dict(void) {
     assert(k == 0);
     k = string_dict_lookup(d, "SUCCESS");
     assert(k == 0);
+    (void)k;
 
     // 2. Bulk encode a mock column
     const char** strings = malloc(4 * sizeof(char*));

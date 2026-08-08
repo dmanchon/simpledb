@@ -4,6 +4,8 @@
 #include "simpledb/mmap_file.h"
 #include "simpledb/filter.h"
 #include "simpledb/string_dict.h"
+#include "simpledb/bitmap.h"
+#include "simpledb/schema_registry.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -214,6 +216,49 @@ void test_string_dict(void) {
     string_dict_free(d);
 }
 
+void test_bitmap(void) {
+    printf("Testing Bitmap...\n");
+    bitmap_t* bmp = bitmap_create(8); // 8 bytes = 64 bits
+
+    // Initially everything should be NOT NULL (0) if zero-initialized
+    assert(bitmap_is_set(bmp, 5) == false);
+
+    bitmap_set(bmp, 5);
+    assert(bitmap_is_set(bmp, 5) == true);
+    assert(bitmap_is_set(bmp, 4) == false);
+
+    bitmap_clear(bmp, 5);
+    assert(bitmap_is_set(bmp, 5) == false);
+
+    bitmap_free(bmp);
+    printf("Bitmap tests passed!\n");
+}
+
+void test_schema_registry(void) {
+    printf("Testing Schema Registry...\n");
+    schema_registry_t* reg = schema_registry_create();
+
+    int32_t idx1 = schema_registry_add_column(reg, "user_id", COL_TYPE_I32);
+    int32_t idx2 = schema_registry_add_column(reg, "status", COL_TYPE_STRING_DICT);
+
+    assert(idx1 == 0);
+    assert(idx2 == 1);
+    assert(reg->count == 2);
+    (void)idx1;
+    (void)idx2;
+
+    int32_t lookup_idx = schema_registry_get_column_index(reg, "status");
+    assert(lookup_idx == 1);
+    (void)lookup_idx;
+
+    int32_t missing_idx = schema_registry_get_column_index(reg, "salary");
+    assert(missing_idx == -1);
+    (void)missing_idx;
+
+    schema_registry_free(reg);
+    printf("Schema Registry tests passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -225,6 +270,8 @@ int main(void) {
     test_mmap_file();
     test_filter_and_gather();
     test_string_dict();
+    test_bitmap();
+    test_schema_registry();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

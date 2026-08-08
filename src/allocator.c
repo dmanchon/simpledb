@@ -53,18 +53,28 @@ void buffer_i32_free(buffer_i32_t *buf) {
   }
 }
 
+void buffer_i32_ensure_capacity(buffer_i32_t *buf, size_t needed_capacity) {
+    if (!buf || buf->capacity >= needed_capacity)
+        return;
+    
+    size_t new_cap = (buf->capacity == 0) ? 16 : buf->capacity;
+    while (new_cap < needed_capacity) {
+        new_cap *= 2; // Keep doubling until capacity is big enough
+    }
+    
+    int32_t *new_data = (int32_t *)aligned_malloc(new_cap * sizeof(int32_t));
+    if (buf->data) {
+        if (buf->size > 0) {
+            memcpy(new_data, buf->data, buf->size * sizeof(int32_t));
+        }
+        aligned_free(buf->data);
+    }
+    buf->data = new_data;
+    buf->capacity = new_cap;
+}
+
 void buffer_i32_grow(buffer_i32_t *buf) {
-  size_t new_capacity = (buf->capacity == 0) ? 16 : buf->capacity * 2;
-  int32_t *new_data = (int32_t *)aligned_malloc(new_capacity * sizeof(int32_t));
-  if (!new_data) {
-    fprintf(stderr, "[FATAL ERROR] cannot grow buffer from %zu -> %zu\n",
-            buf->size, new_capacity);
-    exit(EXIT_FAILURE);
-  }
-  if (buf->data && buf->size > 0) {
-    memcpy(new_data, buf->data, buf->size * sizeof(int32_t));
-    aligned_free(buf->data);
-  }
-  buf->data = new_data;
-  buf->capacity = new_capacity;
+    if (!buf) return;
+    size_t new_capacity = (buf->capacity == 0) ? 16 : buf->capacity * 2;
+    buffer_i32_ensure_capacity(buf, new_capacity);
 }

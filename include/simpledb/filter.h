@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "simpledb/allocator.h"
 #include "simpledb/slice.h"
+#include "simpledb/string_dict.h"
 
 // selection_vector_t is a semantic type alias for buffer_i32_t
 typedef buffer_i32_t selection_vector_t;
@@ -27,11 +28,14 @@ static inline int32_t selection_vector_at(const selection_vector_t* sel, size_t 
 
 // Out-of-line Vectorized Query Primitives (Implemented in src/filter.c)
 
-// Capacity growth helper ensuring sel->capacity >= needed
-void selection_vector_ensure_capacity(selection_vector_t* sel, size_t needed);
 
 // Branchless Filter Kernel: Appends row indices where src[i] > target
 bool filter_gt_i32(slice_i32_t src, int32_t target, selection_vector_t* out_sel);
 
+// Branchless Filter Kernel: Appends row indices where src[i] == target
+bool filter_eq_i32(slice_i32_t src, int32_t target, selection_vector_t* out_sel);
+
 // Zero-Copy Gather Operator: Extracts values at selected row indices into out_buf
 bool gather_i32(slice_i32_t src, const selection_vector_t* sel, buffer_i32_t* out_buf);
+
+bool gather_i32_decode(slice_i32_t keys_src, const string_dict_t* dict, const selection_vector_t* sel, const char*** out_strings);

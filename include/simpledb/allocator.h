@@ -22,6 +22,7 @@ void  aligned_free(void* ptr);
 buffer_i32_t* buffer_i32_create(size_t initial_capacity);
 void          buffer_i32_free(buffer_i32_t* buf);
 void          buffer_i32_grow(buffer_i32_t* buf);
+void          buffer_i32_ensure_capacity(buffer_i32_t* buf, size_t needed_capacity);
 
 // Hot path function (Kept static inline in header for zero call overhead in loops)
 static inline bool buffer_i32_push(buffer_i32_t* buf, int32_t val) {

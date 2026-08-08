@@ -69,10 +69,10 @@ Row indices (`0` to `2.14 billion`) fit inside `int32_t`, so `selection_vector_t
 
 The filter loop writes row indices unconditionally on every iteration. This means the output buffer must have enough pre-allocated capacity to hold the worst case — that is, every row in `src` matches the predicate.
 
-`selection_vector_ensure_capacity` doubles capacity in a loop until sufficient space exists:
+`buffer_i32_ensure_capacity` doubles capacity in a loop until sufficient space exists:
 
 ```c
-void selection_vector_ensure_capacity(selection_vector_t *sel, size_t needed_capacity) {
+void buffer_i32_ensure_capacity(buffer_i32_t *buf, size_t needed_capacity) {
     if (!sel || sel->capacity >= needed_capacity)
         return;
     size_t new_cap = (sel->capacity == 0) ? 16 : sel->capacity;
@@ -91,7 +91,7 @@ void selection_vector_ensure_capacity(selection_vector_t *sel, size_t needed_cap
 }
 ```
 
-A single call before the loop (`selection_vector_ensure_capacity(out_sel, out_sel->size + src.len)`) guarantees zero allocations inside the hot path. This is the same pre-allocation strategy used by ClickHouse and DuckDB for their selection vector filter kernels.
+A single call before the loop (`buffer_i32_ensure_capacity(out_sel, out_sel->size + src.len)`) guarantees zero allocations inside the hot path. This is the same pre-allocation strategy used by ClickHouse and DuckDB for their selection vector filter kernels.
 
 Note that the guard frees `sel->data` unconditionally when it exists — regardless of whether `sel->size > 0` — to avoid a memory leak when a selection vector is cleared and reused.
 
@@ -109,7 +109,7 @@ bool filter_gt_i32(slice_i32_t src, int32_t target, selection_vector_t *out_sel)
         return false;
 
     // worst case scenario: all rows match, need room for existing + new
-    selection_vector_ensure_capacity(out_sel, out_sel->size + src.len);
+    buffer_i32_ensure_capacity(out_sel, out_sel->size + src.len);
 
     for (size_t i = 0; i < src.len; i++) {
         bool match               = src.data[i] > target;
@@ -133,7 +133,7 @@ bool gather_i32(slice_i32_t src, const selection_vector_t *sel, buffer_i32_t *ou
     if (!src.data || !sel || !out_buf)
         return false;
 
-    selection_vector_ensure_capacity(out_buf, sel->size);
+    buffer_i32_ensure_capacity(out_buf, sel->size);
 
     for (size_t i = 0; i < sel->size; i++) {
         buffer_i32_push(out_buf, slice_i32_at(src, (size_t)sel->data[i]));
@@ -144,7 +144,7 @@ bool gather_i32(slice_i32_t src, const selection_vector_t *sel, buffer_i32_t *ou
 
 `sel->data[i]` contains a row index offset (e.g. `82`). `slice_i32_at(src, 82)` jumps directly to that position in the source column, reading only the matching row. Columns not referenced in the query projection are never touched.
 
-`selection_vector_ensure_capacity(out_buf, sel->size)` pre-allocates exactly `sel->size` slots before the loop. `buffer_i32_push` then appends each gathered value, inheriting the same dynamic growth infrastructure as every other buffer in `simpledb` — no special-cased allocation logic needed.
+`buffer_i32_ensure_capacity(out_buf, sel->size)` pre-allocates exactly `sel->size` slots before the loop. `buffer_i32_push` then appends each gathered value, inheriting the same dynamic growth infrastructure as every other buffer in `simpledb` — no special-cased allocation logic needed.
 
 ---
 

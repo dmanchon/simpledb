@@ -3,9 +3,11 @@
 #include "simpledb/slice.h"
 #include "simpledb/mmap_file.h"
 #include "simpledb/filter.h"
+#include "simpledb/string_dict.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static void test_allocator(void) {
     void* ptr = aligned_malloc(1024);
@@ -81,7 +83,7 @@ static void test_slices(void) {
 
 static void test_mmap_file(void) {
     const char *tmp_filename = "test_column.bin";
-    
+
     // Write 100 integers to temporary column file
     FILE *f = fopen(tmp_filename, "wb");
     assert(f != NULL);
@@ -144,6 +146,57 @@ static void test_filter_and_gather(void) {
     buffer_i32_free(gathered_buf);
 }
 
+void test_string_dict(void) {
+    // 1. New dict & basic insertion
+    string_dict_t* d = string_dict_create();
+    int32_t k;
+    
+    k = string_dict_insert(d, "SUCCESS");
+    assert(k == 0);
+    k = string_dict_insert(d, "FAILURE");
+    assert(k == 1);
+    k = string_dict_insert(d, "SUCCESS"); // Deduplicated!
+    assert(k == 0);
+    k = string_dict_lookup(d, "SUCCESS");
+    assert(k == 0);
+
+    // 2. Bulk encode a mock column
+    const char** strings = malloc(4 * sizeof(char*));
+    strings[0] = "SUCCESS";
+    strings[1] = "FAILURE";
+    strings[2] = "SUCCESS";
+    strings[3] = "TIMEOUT";
+
+    buffer_i32_t* out_keys = buffer_i32_create(4);
+    string_dict_encode_column(d, strings, 4, out_keys);
+    
+    assert(out_keys->size == 4);
+    assert(out_keys->data[0] == 0); // SUCCESS
+    assert(out_keys->data[2] == 0); // SUCCESS
+
+    // 3. Filter the encoded column (WHERE status = 'SUCCESS')
+    selection_vector_t* sel = selection_vector_create(16);
+    slice_i32_t state_slice = buffer_i32_as_slice(out_keys);
+    filter_eq_i32(state_slice, 0, sel);
+    
+    assert(sel->size == 2); // Row 0 and Row 2 matched!
+
+    // 4. Gather & Decode (Late Materialization)
+    const char** out_strings = NULL; // Must be initialized
+    gather_i32_decode(state_slice, d, sel, &out_strings); // Pass address!
+    
+    assert(strcmp(out_strings[0], "SUCCESS") == 0);
+    assert(strcmp(out_strings[1], "SUCCESS") == 0);
+
+    // 5. Cleanup memory
+    free(strings);
+    free(out_strings);
+    buffer_i32_free(out_keys);
+    selection_vector_free(sel);
+    string_dict_free(d);
+}
+
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -154,7 +207,8 @@ int main(void) {
     test_slices();
     test_mmap_file();
     test_filter_and_gather();
+    test_string_dict();
 
-    printf("SUCCESS: All C11 unit tests passed (Day 1 - Day 5)!\n");
+    printf("SUCCESS: All C11 unit tests passed (Day 1 - Day 6)!\n");
     return 0;
 }

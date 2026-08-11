@@ -8,6 +8,7 @@
 #include "simpledb/schema_registry.h"
 #include "simpledb/simd_kernels.h"
 #include "simpledb/storage.h"
+#include "simpledb/sparse_index.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -344,6 +345,60 @@ void test_column_writer(void) {
     printf("Column Writer tests passed!\n");
 }
 
+void test_sparse_index_e2e(void) {
+    printf("Testing Sparse Index E2E...\n");
+    const char* tmp_dir = ".";
+    const char* col_name = "test_col_idx";
+
+    // 1. Create the writer
+    index_writer_t* writer = sparse_index_writer_create(tmp_dir, col_name);
+    assert(writer != NULL);
+
+    // 2. Append 24,576 rows (exactly 3 Granules)
+    int32_t chunk[8192];
+    uint64_t row_offset = 0;
+
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 8192; j++) {
+            chunk[j] = row_offset + j;
+        }
+        // Feed chunk into the index
+        writer->append_fn(writer, chunk, 8192, row_offset);
+        row_offset += 8192;
+    }
+
+    // 3. Finalize and close the file (writes the header!)
+    writer->close_fn(writer);
+    free(writer); // The factory malloc'd the index_writer_t struct
+
+    // 4. Read Phase: Load the index back from disk
+    char idx_path[256];
+    snprintf(idx_path, sizeof(idx_path), "%s/%s.idx", tmp_dir, col_name);
+
+    sparse_index_t* idx = sparse_index_load(idx_path);
+    assert(idx != NULL);
+    assert(idx->header.num_marks == 3);
+    assert(idx->header.min_val == 0);
+    assert(idx->header.max_val == 24575);
+
+    // 5. Search Phase
+    bitmap_t* mask = bitmap_create(1); // 1 byte holds 8 bits
+
+    // Search for 10000, which falls in Granule 1 (8192 to 16383)
+    bool found = sparse_index_search(idx, 10000, mask);
+    assert(found == true);
+    (void)found;
+    assert(bitmap_is_set(mask, 1) == true);
+    assert(bitmap_is_set(mask, 0) == false);
+
+    // 6. Cleanup
+    bitmap_free(mask);
+    sparse_index_free(idx);
+    remove(idx_path); // Clean up the temp file
+
+    printf("Sparse Index tests passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -359,6 +414,7 @@ int main(void) {
     test_schema_registry();
     test_simd_primitives();
     test_column_writer();
+    test_sparse_index_e2e();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

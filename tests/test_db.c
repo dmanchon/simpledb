@@ -4,6 +4,8 @@
 #include "simpledb/mmap_file.h"
 #include "simpledb/filter.h"
 #include "simpledb/string_dict.h"
+#include "simpledb/null_bitmap.h"
+#include "simpledb/schema_registry.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -147,7 +149,7 @@ static void test_filter_and_gather(void) {
     bool chained_ok = filter_gt_i32_sel(salary_slice, 9000, sel, sel2);
     assert(chained_ok);
     (void)chained_ok;
-    
+
     assert(sel2->size == 99);
     assert(selection_vector_at(sel2, 0) == 901); // Row 901 -> 9010
     assert(selection_vector_at(sel2, 98) == 999); // Row 999 -> 9990
@@ -163,7 +165,7 @@ void test_string_dict(void) {
     // 1. New dict & basic insertion
     string_dict_t* d = string_dict_create();
     int32_t k;
-    
+
     k = string_dict_insert(d, "SUCCESS");
     assert(k == 0);
     k = string_dict_insert(d, "FAILURE");
@@ -183,7 +185,7 @@ void test_string_dict(void) {
 
     buffer_i32_t* out_keys = buffer_i32_create(4);
     string_dict_encode_column(d, strings, 4, out_keys);
-    
+
     assert(out_keys->size == 4);
     assert(out_keys->data[0] == 0); // SUCCESS
     assert(out_keys->data[2] == 0); // SUCCESS
@@ -192,13 +194,13 @@ void test_string_dict(void) {
     selection_vector_t* sel = selection_vector_create(16);
     slice_i32_t state_slice = buffer_i32_as_slice(out_keys);
     filter_eq_i32(state_slice, 0, sel);
-    
+
     assert(sel->size == 2); // Row 0 and Row 2 matched!
 
     // 4. Gather & Decode (Late Materialization)
     const char** out_strings = NULL; // Must be initialized
     gather_i32_decode(state_slice, d, sel, &out_strings); // Pass address!
-    
+
     assert(strcmp(out_strings[0], "SUCCESS") == 0);
     assert(strcmp(out_strings[1], "SUCCESS") == 0);
 
@@ -210,6 +212,44 @@ void test_string_dict(void) {
     string_dict_free(d);
 }
 
+void test_null_bitmap(void) {
+    printf("Testing Null Bitmap...\n");
+    null_bitmap_t* bmp = null_bitmap_create(8); // 8 bytes = 64 bits
+
+    // Initially everything should be NOT NULL (0) if zero-initialized
+    assert(null_bitmap_is_null(bmp, 5) == false);
+
+    null_bitmap_set_null(bmp, 5);
+    assert(null_bitmap_is_null(bmp, 5) == true);
+    assert(null_bitmap_is_null(bmp, 4) == false);
+
+    null_bitmap_clear_null(bmp, 5);
+    assert(null_bitmap_is_null(bmp, 5) == false);
+
+    null_bitmap_free(bmp);
+    printf("Null Bitmap tests passed!\n");
+}
+
+void test_schema_registry(void) {
+    printf("Testing Schema Registry...\n");
+    schema_registry_t* reg = schema_registry_create();
+    
+    int32_t idx1 = schema_registry_add_column(reg, "user_id", COL_TYPE_I32);
+    int32_t idx2 = schema_registry_add_column(reg, "status", COL_TYPE_STRING_DICT);
+    
+    assert(idx1 == 0);
+    assert(idx2 == 1);
+    assert(reg->count == 2);
+    
+    int32_t lookup_idx = schema_registry_get_column_index(reg, "status");
+    assert(lookup_idx == 1);
+    
+    int32_t missing_idx = schema_registry_get_column_index(reg, "salary");
+    assert(missing_idx == -1);
+    
+    schema_registry_free(reg);
+    printf("Schema Registry tests passed!\n");
+}
 
 int main(void) {
     database_t* db = db_open("test_db");
@@ -222,7 +262,9 @@ int main(void) {
     test_mmap_file();
     test_filter_and_gather();
     test_string_dict();
+    test_null_bitmap();
+    test_schema_registry();
 
-    printf("SUCCESS: All C11 unit tests passed (Day 1 - Day 6)!\n");
+    printf("SUCCESS: All C11 unit tests passed (Day 1 - Day 7)!\n");
     return 0;
 }

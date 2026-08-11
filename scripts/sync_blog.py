@@ -47,6 +47,20 @@ POST_METADATA = {
         "description": "How ClickHouse and DuckDB execute query filters without CPU branch mispredictions. Late materialization, selection vectors (sel_t), and zero-copy gather kernels.",
         "pubDate": "2026-08-03",
         "tags": ["c11", "selection-vectors", "filtering", "performance", "branchless"]
+    },
+    "day6.md": {
+        "slug": "day6-high-cardinality-string-dictionaries.md",
+        "title": "Day 6: High Cardinality String Dictionaries",
+        "description": "Efficient dictionary encoding for strings to reduce memory footprint and speed up equality comparisons.",
+        "pubDate": "2026-08-04",
+        "tags": ["c11", "strings", "dictionary-encoding", "performance"]
+    },
+    "day7.md": {
+        "slug": "day7-null-bitmaps.md",
+        "title": "Day 7: Null Bitmaps & Dynamic Schema Registry",
+        "description": "Handling missing data in C without ruining SIMD pipelines or memory bandwidth. Building a dynamic schema registry for JSON ingestion.",
+        "pubDate": "2026-08-10",
+        "tags": ["simpledb", "c", "simd", "memory"]
     }
 }
 
@@ -57,6 +71,8 @@ URL_MAP = {
     "day3.md": "/blog/day3-zero-copy-mmap-files/",
     "day4.md": "/blog/day4-build-system-and-benchmarking/",
     "day5.md": "/blog/day5-column-vectors-and-selection-vectors/",
+    "day6.md": "/blog/day6-high-cardinality-string-dictionaries/",
+    "day7.md": "/blog/day7-null-bitmaps/",
 }
 
 def clean_latex_math(text):

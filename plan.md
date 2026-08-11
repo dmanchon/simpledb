@@ -461,8 +461,16 @@ throughput_gauge = Gauge("simpledb_simd_throughput_gbps", "SIMD memory scan thro
 def poll_telemetry():
     metrics = db.query("SELECT metric_name, value FROM system.metrics").to_dict()
     mem_gauge.set(metrics["memory_aligned_allocated_bytes"])
-    throughput_gauge.set(metrics["simd_throughput_gbps"])
-```
+    throughput_gauge.set(metrics["simd_throughput_gbps"])```
 
+---
 
+## 11. Future Work & Benchmarking (jsonbench.com)
 
+While `simpledb` is designed as a foundational, educational C11 prototype over a 16-day curriculum, its architecture maps directly to the techniques used by industry-leading systems that compete on benchmarks like **[jsonbench.com](https://jsonbench.com)**.
+
+To evolve `simpledb` from this 16-day prototype into an engine capable of processing the massive JSON analytical workloads seen in jsonbench (e.g., 500GB of deeply nested raw JSON events), the following architectural extensions would be required:
+
+1. **Robust JSON Path Parsing (`simdjson`)**: Extending the Day 7 dynamic schema registry to handle recursive, deeply nested object paths (e.g., extracting `data.commit.collection`), rather than just flat key-value pairs.
+2. **Multi-Threaded Ingestion Pipeline**: Parallelizing the JSON parsing and column encoding to saturate all available CPU cores.
+3. **Advanced On-Disk Compression**: Implementing dictionary-aware block compression using Zstd or LZ4 to dramatically reduce the disk I/O bottlenecks when scaling up to 1 Billion rows.

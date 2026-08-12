@@ -1,5 +1,8 @@
 #include "simpledb/storage.h"
+#include "simpledb/bitmap.h"
+#include "simpledb/mmap_file.h"
 #include "simpledb/schema_registry.h"
+#include "simpledb/slice.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -59,4 +62,56 @@ void column_writer_attach_index(column_writer_t *writer, index_writer_t *index) 
         exit(EXIT_FAILURE);
     }
     writer->indexes[writer->num_indexes++] = index;
+}
+
+column_reader_t *column_reader_create(const char *part_dir, const char *col_name,
+                                      column_type_t type, const bitmap_t *mask) {
+    column_reader_t *reader = malloc(sizeof(column_reader_t));
+    if (!reader)
+        return NULL;
+
+    char bin_file_path[1024];
+    snprintf(bin_file_path, sizeof(bin_file_path), "%s/%s.bin", part_dir, col_name);
+
+    reader->mmap = mmap_file_open(bin_file_path);
+    if (!reader->mmap) {
+        free(reader);
+        return NULL;
+    }
+
+    reader->type = type;
+    reader->mask = mask;
+    reader->current_granule_idx = 0;
+    size_t bytes_per_granule = 8192 * sizeof(int32_t);
+    reader->total_granules = (reader->mmap->size + bytes_per_granule - 1) / bytes_per_granule;
+
+    return reader;
+}
+
+void column_reader_free(column_reader_t *reader) {
+    mmap_file_close(reader->mmap);
+    free(reader);
+}
+
+slice_i32_t column_reader_next_granule_i32(column_reader_t *reader) {
+    while (reader->current_granule_idx < reader->total_granules &&
+           reader->mask &&
+           !bitmap_is_set(reader->mask, reader->current_granule_idx)) {
+        reader->current_granule_idx++;
+    }
+
+    if (reader->current_granule_idx >= reader->total_granules) {
+        return slice_i32_create(NULL, 0);
+    }
+
+    const int32_t *ptr = (const int32_t *)reader->mmap->data + (reader->current_granule_idx * GRANULE_SIZE);
+
+    size_t rows = GRANULE_SIZE;
+    if (reader->current_granule_idx == reader->total_granules - 1) {
+        size_t total_rows_in_file = reader->mmap->size / sizeof(int32_t);
+        rows = total_rows_in_file - (reader->current_granule_idx * GRANULE_SIZE);
+    }
+
+    reader->current_granule_idx++;
+    return slice_i32_create(ptr, rows);
 }

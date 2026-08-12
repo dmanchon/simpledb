@@ -399,6 +399,43 @@ void test_sparse_index_e2e(void) {
     printf("Sparse Index tests passed!\n");
 }
 
+void test_column_reader(void) {
+    // 1. Write a dummy file with exactly 3 Granules (24,576 rows)
+    const char* col_name = "reader_test";
+    column_writer_t* writer = column_writer_create(".", col_name, COL_TYPE_I32);
+    int32_t* data = malloc(24576 * sizeof(int32_t));
+    for(int i = 0; i < 24576; i++) data[i] = i; // 0 to 24575
+    column_writer_append(writer, data, 24576);
+    column_writer_close(writer);
+    free(data);
+
+    // 2. Create a Bitmap that ONLY selects Granule 1
+    bitmap_t* mask = bitmap_create(1);
+    bitmap_set(mask, 1);
+
+    // 3. Open the Reader
+    column_reader_t* reader = column_reader_create(".", col_name, COL_TYPE_I32, mask);
+
+    // 4. Fetch the next Granule.
+    // It should SKIP Granule 0 and instantly return Granule 1!
+    slice_i32_t slice = column_reader_next_granule_i32(reader);
+
+    assert(slice.len == 8192);
+    // The first element of Granule 1 should be 8192
+    assert(slice_i32_at(slice, 0) == 8192);
+
+    // 5. Fetch again. Granule 2 is masked out, so it should hit EOF!
+    slice_i32_t empty = column_reader_next_granule_i32(reader);
+    assert(empty.len == 0);
+
+    // 6. Cleanup
+    column_reader_free(reader);
+    bitmap_free(mask);
+    remove("./reader_test.bin");
+
+    printf("Column Reader tests passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -415,6 +452,7 @@ int main(void) {
     test_simd_primitives();
     test_column_writer();
     test_sparse_index_e2e();
+    test_column_reader();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

@@ -9,6 +9,8 @@
 #include "simpledb/simd_kernels.h"
 #include "simpledb/storage.h"
 #include "simpledb/sparse_index.h"
+#include "simpledb/tokenizer.h"
+#include "simpledb/fts.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -436,6 +438,129 @@ void test_column_reader(void) {
     printf("Column Reader tests passed!\n");
 }
 
+void test_raw_strings(void) {
+    const char* col_name = "string_test";
+    column_writer_t* writer = column_writer_create(".", col_name, COL_TYPE_STRING);
+
+    const char* data[3] = {
+        "apple",
+        "banana",
+        "cherry"
+    };
+
+    column_writer_append(writer, data, 3);
+    column_writer_close(writer);
+
+    // 3. Open the Reader
+    column_reader_t* reader = column_reader_create(".", col_name, COL_TYPE_STRING, NULL);
+    slice_i32_t slice = column_reader_next_granule_i32(reader);
+
+    assert(slice.len == 3);
+
+    assert(slice_i32_at(slice, 0) == 0);
+    assert(slice_i32_at(slice, 1) == 6);
+    assert(slice_i32_at(slice, 2) == 13);
+
+    const char* strings_data = (const char*)reader->strings_mmap->data;
+    assert(strcmp(strings_data + 0, "apple") == 0);
+    assert(strcmp(strings_data + 6, "banana") == 0);
+    assert(strcmp(strings_data + 13, "cherry") == 0);
+
+    // 6. Cleanup
+    column_reader_free(reader);
+    remove("./string_test.bin");
+    remove("./string_test.strings");
+
+    printf("Raw string tests passed!\n");
+}
+
+void test_tokenizer(void) {
+    printf("Testing Zero-Copy Tokenizer...\n");
+
+    const char* text = "  Hello, World!!!  This is state-of-the-art... don't you agree?  ";
+    tokenizer_t t = tokenizer_create(text, strlen(text));
+    token_t tok;
+
+    // 1. "Hello"
+    assert(tokenizer_next(&t, &tok) == 1);
+    assert(tok.len == 5 && strncmp(tok.text, "Hello", 5) == 0);
+
+    // 2. "World"
+    assert(tokenizer_next(&t, &tok) == 1);
+    assert(tok.len == 5 && strncmp(tok.text, "World", 5) == 0);
+
+    // 3. "This"
+    assert(tokenizer_next(&t, &tok) == 1);
+    assert(tok.len == 4 && strncmp(tok.text, "This", 4) == 0);
+
+    // 4. "is"
+    assert(tokenizer_next(&t, &tok) == 1);
+    assert(tok.len == 2 && strncmp(tok.text, "is", 2) == 0);
+
+    // 5. "state-of-the-art" (Testing hyphen whitelist!)
+    assert(tokenizer_next(&t, &tok) == 1);
+    assert(tok.len == 16 && strncmp(tok.text, "state-of-the-art", 16) == 0);
+
+    // 6. "don't" (Testing apostrophe whitelist!)
+    assert(tokenizer_next(&t, &tok) == 1);
+    assert(tok.len == 5 && strncmp(tok.text, "don't", 5) == 0);
+
+    // 7. "you"
+    assert(tokenizer_next(&t, &tok) == 1);
+
+    // 8. "agree"
+    assert(tokenizer_next(&t, &tok) == 1);
+
+    // 9. EOF!
+    assert(tokenizer_next(&t, &tok) == 0);
+
+    printf("Tokenizer tests passed!\n");
+}
+
+void test_inverted_index(void) {
+    printf("Testing FTS Inverted Index...\n");
+
+    inverted_index_t* idx = inverted_index_create();
+
+    // Simulate Granule 0
+    inverted_index_add_document(idx, "database connection timeout", 0);
+    inverted_index_add_document(idx, "timeout occurred", 0);
+
+    // Simulate Granule 1
+    inverted_index_add_document(idx, "query executed successfully", 1);
+
+    // Simulate Granule 2 (Testing case-insensitivity with TIMEOUT)
+    inverted_index_add_document(idx, "TIMEOUT while waiting for connection", 2);
+
+    // 1. Search for "timeout" (Should exist in Granules 0 and 2)
+    bitmap_t* result = inverted_index_search(idx, "timeout");
+    assert(result != NULL);
+    assert(bitmap_is_set(result, 0) == true);
+    assert(bitmap_is_set(result, 1) == false);
+    assert(bitmap_is_set(result, 2) == true);
+
+    // 2. Search for "connection" (Should exist in Granules 0 and 2)
+    result = inverted_index_search(idx, "connection");
+    assert(result != NULL);
+    assert(bitmap_is_set(result, 0) == true);
+    assert(bitmap_is_set(result, 1) == false);
+    assert(bitmap_is_set(result, 2) == true);
+
+    // 3. Search for "query" (Should exist only in Granule 1)
+    result = inverted_index_search(idx, "query");
+    assert(result != NULL);
+    assert(bitmap_is_set(result, 0) == false);
+    assert(bitmap_is_set(result, 1) == true);
+    assert(bitmap_is_set(result, 2) == false);
+
+    // 4. Search for "error" (Does not exist anywhere)
+    result = inverted_index_search(idx, "error");
+    assert(result == NULL);
+
+    inverted_index_free(idx);
+    printf("FTS tests passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -453,6 +578,9 @@ int main(void) {
     test_column_writer();
     test_sparse_index_e2e();
     test_column_reader();
+    test_raw_strings();
+    test_tokenizer();
+    test_inverted_index();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

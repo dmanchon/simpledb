@@ -11,6 +11,7 @@
 #include "simpledb/sparse_index.h"
 #include "simpledb/tokenizer.h"
 #include "simpledb/fts.h"
+#include "simpledb/deletion_vector.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -561,6 +562,42 @@ void test_inverted_index(void) {
     printf("FTS tests passed!\n");
 }
 
+void test_deletion_vector(void) {
+    printf("Testing Deletion Vector...\n");
+
+    // 1. Sparse test
+    deletion_vector_t *dv = deletion_vector_create(10);
+    deletion_vector_add(dv, 5);
+    deletion_vector_add(dv, 1000000);
+    assert(deletion_vector_is_deleted(dv, 5) == true);
+    assert(deletion_vector_is_deleted(dv, 1000000) == true);
+    assert(deletion_vector_is_deleted(dv, 6) == false);
+    deletion_vector_free(dv);
+
+    // 2. Dense upgrade test
+    dv = deletion_vector_create(10);
+    for (uint32_t i = 0; i < 5000; i++) {
+        deletion_vector_add(dv, i);
+    }
+    assert(deletion_vector_is_deleted(dv, 4999) == true);
+    assert(deletion_vector_is_deleted(dv, 5000) == false);
+    deletion_vector_free(dv);
+
+    // 3. SIMD mask test
+    dv = deletion_vector_create(10);
+    deletion_vector_add(dv, 2);
+    deletion_vector_add(dv, 3);
+    deletion_vector_add(dv, 63);
+    uint64_t mask = deletion_vector_get_simd_mask(dv, 0);
+    assert((mask & (1ULL << 2)) != 0);
+    assert((mask & (1ULL << 3)) != 0);
+    assert((mask & (1ULL << 63)) != 0);
+    assert((mask & (1ULL << 4)) == 0);
+    deletion_vector_free(dv);
+
+    printf("Deletion Vector tests passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -581,6 +618,7 @@ int main(void) {
     test_raw_strings();
     test_tokenizer();
     test_inverted_index();
+    test_deletion_vector();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

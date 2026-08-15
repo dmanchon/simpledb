@@ -61,6 +61,20 @@ POST_METADATA = {
         "description": "Handling missing data in C without ruining SIMD pipelines or memory bandwidth. Building a dynamic schema registry for JSON ingestion.",
         "pubDate": "2026-08-10",
         "tags": ["simpledb", "c", "simd", "memory"]
+    },
+    "day8.md": {
+        "slug": "day8-simd-apl-vector-primitives.md",
+        "title": "Day 8: SIMD APL Vector Primitives (Compress & Reduction)",
+        "description": "Write SIMD filter & compress C kernel executing sub-millisecond selection over 4 million elements.",
+        "pubDate": "2026-08-11",
+        "tags": ["c11", "simd", "apl", "performance"]
+    },
+    "day9.md": {
+        "slug": "day9-clickhouse-style-storage-and-marks.md",
+        "title": "Day 9: ClickHouse-Style On-Disk Column Layout & Marks Files (.mrk)",
+        "description": "Writing binary serializers to create immutable column parts with .bin files and companion .mrk offset files to prevent OS file descriptor exhaustion.",
+        "pubDate": "2026-08-12",
+        "tags": ["clickhouse", "storage", "c11", "databases"]
     }
 }
 
@@ -73,6 +87,8 @@ URL_MAP = {
     "day5.md": "/blog/day5-column-vectors-and-selection-vectors/",
     "day6.md": "/blog/day6-high-cardinality-string-dictionaries/",
     "day7.md": "/blog/day7-null-bitmaps/",
+    "day8.md": "/blog/day8-simd-apl-vector-primitives/",
+    "day9.md": "/blog/day9-clickhouse-style-storage-and-marks/",
 }
 
 def clean_latex_math(text):

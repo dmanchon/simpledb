@@ -6,6 +6,8 @@
 #include "simpledb/string_dict.h"
 #include "simpledb/null_bitmap.h"
 #include "simpledb/schema_registry.h"
+#include "simpledb/simd_kernels.h"
+#include <time.h>
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -233,22 +235,63 @@ void test_null_bitmap(void) {
 void test_schema_registry(void) {
     printf("Testing Schema Registry...\n");
     schema_registry_t* reg = schema_registry_create();
-    
+
     int32_t idx1 = schema_registry_add_column(reg, "user_id", COL_TYPE_I32);
     int32_t idx2 = schema_registry_add_column(reg, "status", COL_TYPE_STRING_DICT);
-    
+
     assert(idx1 == 0);
     assert(idx2 == 1);
     assert(reg->count == 2);
-    
+
     int32_t lookup_idx = schema_registry_get_column_index(reg, "status");
     assert(lookup_idx == 1);
-    
+
     int32_t missing_idx = schema_registry_get_column_index(reg, "salary");
     assert(missing_idx == -1);
-    
+
     schema_registry_free(reg);
     printf("Schema Registry tests passed!\n");
+}
+
+static double get_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (ts.tv_sec * 1000.0) + (ts.tv_nsec / 1000000.0);
+}
+
+void test_simd_primitives(void) {
+    printf("Testing SIMD APL Primitives (4 Million Elements)...\n");
+    const size_t NUM_ELEMENTS = 4000000;
+
+    int32_t* src = aligned_malloc(NUM_ELEMENTS * sizeof(int32_t));
+    uint8_t* mask = aligned_malloc(NUM_ELEMENTS * sizeof(uint8_t));
+    int32_t* dst = aligned_malloc(NUM_ELEMENTS * sizeof(int32_t));
+
+    assert(src && mask && dst);
+
+    // Generate random data
+    for (size_t i = 0; i < NUM_ELEMENTS; i++) {
+        src[i] = rand() % 1000;
+        mask[i] = (rand() % 100) < 25 ? 1 : 0; // 25% selectivity
+    }
+
+    double start = get_time_ms();
+    size_t written = simd_compress_i32(src, mask, dst, NUM_ELEMENTS);
+    double end = get_time_ms();
+
+    printf("Compress extracted %zu elements in %.3f ms\n", written, end - start);
+
+    start = get_time_ms();
+    int64_t total_sum = simd_sum_i32(dst, written);
+    end = get_time_ms();
+
+    printf("Sum Reduction (Total: %lld) took %.3f ms\n", total_sum, end - start);
+
+    aligned_free(src);
+    aligned_free(mask);
+    aligned_free(dst);
+
+    printf("SIMD Primitives tests passed!\n");
 }
 
 int main(void) {
@@ -264,6 +307,7 @@ int main(void) {
     test_string_dict();
     test_null_bitmap();
     test_schema_registry();
+    test_simd_primitives();
 
     printf("SUCCESS: All C11 unit tests passed (Day 1 - Day 7)!\n");
     return 0;

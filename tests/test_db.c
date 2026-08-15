@@ -12,6 +12,7 @@
 #include "simpledb/tokenizer.h"
 #include "simpledb/fts.h"
 #include "simpledb/deletion_vector.h"
+#include "simpledb/table.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -598,6 +599,105 @@ void test_deletion_vector(void) {
     printf("Deletion Vector tests passed!\n");
 }
 
+void test_table_creation(void) {
+    table_t* t = table_create("events");
+    assert(t != NULL);
+    assert(strcmp(t->name, "events") == 0);
+    assert(t->row_count == 0);
+
+    table_destroy(t);
+    printf("test_table_creation passed.\n");
+}
+
+void test_table_e2e_batch_ingestion(void) {
+    printf("Testing Table E2E Batch Ingestion...\n");
+
+    // 1. Create table & setup schema
+    table_t* table = table_create("user_events");
+    assert(table != NULL);
+
+    schema_registry_t* schema = schema_registry_create();
+    schema_registry_add_column(schema, "user_id", COL_TYPE_I32);
+    schema_registry_add_column(schema, "score", COL_TYPE_F32);
+    schema_registry_add_column(schema, "country", COL_TYPE_STRING_DICT);
+    schema_registry_add_column(schema, "comment", COL_TYPE_STRING);
+    table->schema = schema;
+
+    // Allocate column buffers
+    table->column_buffers = calloc(schema->count, sizeof(void*));
+    table->column_buffers[0] = buffer_i32_create(4);
+    table->column_buffers[1] = buffer_i32_create(4);
+
+    string_dict_column_t* sdc = malloc(sizeof(string_dict_column_t));
+    sdc->dict = string_dict_create();
+    sdc->keys_buf = buffer_i32_create(4);
+    table->column_buffers[2] = sdc;
+
+    table->column_buffers[3] = raw_string_column_create(4);
+
+    // 2. Batch 1: Ingest 3 rows
+    int32_t b1_user_ids[] = { 101, 102, 103 };
+    float   b1_scores[]   = { 95.5f, 82.0f, 99.1f };
+    const char* b1_countries[] = { "US", "ES", "US" };
+    const char* b1_comments[]  = { "First event", "Second event", "Third event" };
+
+    const void* batch1[4];
+    batch1[0] = b1_user_ids;
+    batch1[1] = b1_scores;
+    batch1[2] = b1_countries;
+    batch1[3] = b1_comments;
+
+    int rc = table_insert_batch(table, (const void***)batch1, 4, 3);
+    assert(rc == 0);
+    assert(table->row_count == 3);
+
+    // 3. Batch 2: Ingest 2 more rows to test offset appending & buffer growth
+    int32_t b2_user_ids[] = { 104, 105 };
+    float   b2_scores[]   = { 77.4f, 88.9f };
+    const char* b2_countries[] = { "FR", "ES" };
+    const char* b2_comments[]  = { "Fourth event", "Fifth event" };
+
+    const void* batch2[4];
+    batch2[0] = b2_user_ids;
+    batch2[1] = b2_scores;
+    batch2[2] = b2_countries;
+    batch2[3] = b2_comments;
+
+    rc = table_insert_batch(table, (const void***)batch2, 4, 2);
+    assert(rc == 0);
+    assert(table->row_count == 5);
+
+    // 4. Verify Column 0 (I32 user_id)
+    buffer_i32_t* c0 = (buffer_i32_t*)table->column_buffers[0];
+    assert(c0->size == 5);
+    assert(c0->data[0] == 101 && c0->data[4] == 105);
+
+    // 5. Verify Column 1 (F32 score)
+    buffer_i32_t* c1 = (buffer_i32_t*)table->column_buffers[1];
+    assert(c1->size == 5);
+    assert(((float*)c1->data)[0] == 95.5f);
+    assert(((float*)c1->data)[4] == 88.9f);
+
+    // 6. Verify Column 2 (STRING_DICT country)
+    string_dict_column_t* c2 = (string_dict_column_t*)table->column_buffers[2];
+    assert(c2->keys_buf->size == 5);
+    assert(c2->keys_buf->data[0] == 0); // "US"
+    assert(c2->keys_buf->data[1] == 1); // "ES"
+    assert(c2->keys_buf->data[2] == 0); // "US" (deduplicated to 0)
+    assert(c2->keys_buf->data[3] == 2); // "FR"
+    assert(c2->keys_buf->data[4] == 1); // "ES" (deduplicated to 1)
+
+    // 7. Verify Column 3 (Raw String comment)
+    raw_string_column_t* c3 = (raw_string_column_t*)table->column_buffers[3];
+    assert(c3->size == 5);
+    assert(strcmp(c3->strings[0], "First event") == 0);
+    assert(strcmp(c3->strings[4], "Fifth event") == 0);
+
+    // 8. Teardown
+    table_destroy(table);
+    printf("Table E2E Batch Ingestion tests passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -619,6 +719,8 @@ int main(void) {
     test_tokenizer();
     test_inverted_index();
     test_deletion_vector();
+    test_table_creation();
+    test_table_e2e_batch_ingestion();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

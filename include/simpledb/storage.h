@@ -7,21 +7,13 @@
 
 #define GRANULE_SIZE 8192
 
-// Represents a single entry in the .mrk file
-typedef struct {
-    uint64_t offset_in_bin;  // The byte offset in the .bin file where this granule starts
-    uint64_t num_rows;       // Usually 8192, but the final granule might be smaller
-} mark_entry_t;
-
 // State for flushing an in-memory column to disk
 typedef struct {
     const char* column_name;
     column_type_t type;
 
     FILE* bin_fp;            // Open file pointer for writing the raw data
-    FILE* mrk_fp;            // Open file pointer for writing the marks
 
-    uint64_t current_offset; // Running total of bytes written to bin_fp
     uint64_t rows_written;   // Running total of rows written
 } column_writer_t;
 

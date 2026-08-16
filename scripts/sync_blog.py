@@ -75,6 +75,13 @@ POST_METADATA = {
         "description": "Writing binary serializers to create immutable column parts with .bin files and companion .mrk offset files to prevent OS file descriptor exhaustion.",
         "pubDate": "2026-08-12",
         "tags": ["clickhouse", "storage", "c11", "databases"]
+    },
+    "how-this-blog-is-written.md": {
+        "slug": "how-this-blog-is-written.md",
+        "title": "How This Blog Is Written (LLM Socratic Method)",
+        "description": "An overview of how this blog and database engine are co-authored using an AI agent as a documentation and code-review assistant.",
+        "pubDate": "2026-08-09",
+        "tags": ["llm", "ai", "documentation"]
     }
 }
 
@@ -89,6 +96,7 @@ URL_MAP = {
     "day7.md": "/blog/day7-null-bitmaps/",
     "day8.md": "/blog/day8-simd-apl-vector-primitives/",
     "day9.md": "/blog/day9-clickhouse-style-storage-and-marks/",
+    "how-this-blog-is-written.md": "/blog/how-this-blog-is-written/",
 }
 
 def clean_latex_math(text):

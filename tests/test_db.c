@@ -7,6 +7,7 @@
 #include "simpledb/null_bitmap.h"
 #include "simpledb/schema_registry.h"
 #include "simpledb/simd_kernels.h"
+#include "simpledb/storage.h"
 #include <time.h>
 #include <assert.h>
 #include <stdint.h>
@@ -299,6 +300,47 @@ void test_simd_primitives(void) {
     printf("SIMD Primitives tests passed!\n");
 }
 
+void test_column_writer(void) {
+    printf("Testing Column Writer...\n");
+    // Ensure test directory exists or just write to current directory
+    const char* test_dir = ".";
+    const char* col_name = "test_col";
+
+    column_writer_t* writer = column_writer_create(test_dir, col_name, COL_TYPE_I32);
+    assert(writer != NULL);
+    assert(writer->rows_written == 0);
+
+    // Create 10,000 ints
+    size_t num_rows = 10000;
+    int32_t* data = malloc(num_rows * sizeof(int32_t));
+    for (size_t i = 0; i < num_rows; i++) {
+        data[i] = (int32_t)i;
+    }
+
+    // Append in chunks
+    column_writer_append(writer, data, 5000); // chunk 1
+    column_writer_append(writer, data + 5000, 5000); // chunk 2
+
+    assert(writer->rows_written == 10000);
+
+    column_writer_close(writer);
+    free(data);
+
+    // Verify file size
+    FILE* fp = fopen("./test_col.bin", "rb");
+    assert(fp != NULL);
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fclose(fp);
+
+    assert(size == 40000); // 10,000 * 4 bytes
+
+    // Cleanup file
+    remove("./test_col.bin");
+
+    printf("Column Writer tests passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -313,7 +355,8 @@ int main(void) {
     test_null_bitmap();
     test_schema_registry();
     test_simd_primitives();
+    test_column_writer();
 
-    printf("SUCCESS: All C11 unit tests passed (Day 1 - Day 7)!\n");
+    printf("SUCCESS: All C11 unit tests passed (Day 1 - Day 9)!\n");
     return 0;
 }

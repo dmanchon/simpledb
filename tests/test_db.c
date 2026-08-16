@@ -698,6 +698,91 @@ void test_table_e2e_batch_ingestion(void) {
     printf("Table E2E Batch Ingestion tests passed!\n");
 }
 
+static void test_table_flush_e2e(void) {
+    printf("Testing Table Flush E2E (Disk Serialization & Buffer Reset)...\n");
+
+    table_t *table = table_create("events_flush");
+    assert(table != NULL);
+
+    schema_registry_t *schema = schema_registry_create();
+    schema_registry_add_column(schema, "user_id", COL_TYPE_I32);
+    schema_registry_add_column(schema, "score", COL_TYPE_F32);
+    schema_registry_add_column(schema, "country", COL_TYPE_STRING_DICT);
+    schema_registry_add_column(schema, "comment", COL_TYPE_STRING);
+    table->schema = schema;
+
+    table->column_buffers = calloc(schema->count, sizeof(void *));
+    table->column_buffers[0] = buffer_i32_create(4);
+    table->column_buffers[1] = buffer_i32_create(4);
+
+    string_dict_column_t *sdc = malloc(sizeof(string_dict_column_t));
+    sdc->dict = string_dict_create();
+    sdc->keys_buf = buffer_i32_create(4);
+    table->column_buffers[2] = sdc;
+
+    table->column_buffers[3] = raw_string_column_create(4);
+
+    int32_t user_ids[] = { 201, 202, 203 };
+    float scores[] = { 10.5f, 20.0f, 30.5f };
+    const char *countries[] = { "US", "UK", "US" };
+    const char *comments[] = { "alpha", "beta", "gamma" };
+
+    const void *batch[4];
+    batch[0] = user_ids;
+    batch[1] = scores;
+    batch[2] = countries;
+    batch[3] = comments;
+
+    int rc_batch = table_insert_batch(table, (const void ***)batch, 4, 3);
+    assert(rc_batch == 0);
+    assert(table->row_count == 3);
+
+    int rc_flush2 = table_flush(table, ".");
+    assert(rc_flush2 == 0);
+
+    assert(table->row_count == 0);
+    buffer_i32_t *c0 = (buffer_i32_t *)table->column_buffers[0];
+    assert(c0->size == 0);
+    assert(c0->capacity >= 4);
+    (void)c0;
+
+    assert(table->num_parts == 1);
+    assert(table->parts[0]->row_count == 3);
+
+    size_t active_rows = 999;
+    void **active_bufs = table_get_active_buffer(table, &active_rows);
+    assert(active_bufs != NULL && active_rows == 0);
+    (void)active_bufs;
+
+    size_t num_parts = 0;
+    table_part_t **parts = table_get_parts(table, &num_parts);
+    assert(parts != NULL && num_parts == 1);
+    assert(parts[0]->row_count == 3);
+    (void)parts;
+
+    FILE *f_user_id = fopen("./user_id.bin", "rb");
+    assert(f_user_id != NULL);
+    fclose(f_user_id);
+
+    FILE *f_country_dict = fopen("./country.dict", "rb");
+    assert(f_country_dict != NULL);
+    fclose(f_country_dict);
+
+    FILE *f_comment_strings = fopen("./comment.strings", "rb");
+    assert(f_comment_strings != NULL);
+    fclose(f_comment_strings);
+
+    remove("./user_id.bin");
+    remove("./score.bin");
+    remove("./country.bin");
+    remove("./country.dict");
+    remove("./comment.bin");
+    remove("./comment.strings");
+
+    table_destroy(table);
+    printf("Table Flush E2E tests passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -721,6 +806,7 @@ int main(void) {
     test_deletion_vector();
     test_table_creation();
     test_table_e2e_batch_ingestion();
+    test_table_flush_e2e();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

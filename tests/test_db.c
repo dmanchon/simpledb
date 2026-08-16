@@ -10,6 +10,7 @@
 #include <time.h>
 #include <assert.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -242,12 +243,16 @@ void test_schema_registry(void) {
     assert(idx1 == 0);
     assert(idx2 == 1);
     assert(reg->count == 2);
+    (void)idx1;
+    (void)idx2;
 
     int32_t lookup_idx = schema_registry_get_column_index(reg, "status");
     assert(lookup_idx == 1);
+    (void)lookup_idx;
 
     int32_t missing_idx = schema_registry_get_column_index(reg, "salary");
     assert(missing_idx == -1);
+    (void)missing_idx;
 
     schema_registry_free(reg);
     printf("Schema Registry tests passed!\n");
@@ -285,7 +290,7 @@ void test_simd_primitives(void) {
     int64_t total_sum = simd_sum_i32(dst, written);
     end = get_time_ms();
 
-    printf("Sum Reduction (Total: %lld) took %.3f ms\n", total_sum, end - start);
+    printf("Sum Reduction (Total: %" PRId64 ") took %.3f ms\n", total_sum, end - start);
 
     aligned_free(src);
     aligned_free(mask);

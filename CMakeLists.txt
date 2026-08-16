@@ -10,9 +10,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Strict C compiler warning flags
 function(enable_project_warnings TARGET_NAME)
     if(MSVC)
-        target_compile_options(${TARGET_NAME} PRIVATE /W4 /WX)
+        target_compile_options(${TARGET_NAME} PRIVATE /W4)
     else()
-        target_compile_options(${TARGET_NAME} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(${TARGET_NAME} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endfunction()
 

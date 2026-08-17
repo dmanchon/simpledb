@@ -20,7 +20,7 @@ endfunction()
 include_directories(include)
 
 # Static Library Target
-add_library(simpledb_lib STATIC src/db.c src/allocator.c src/mmap_file.c src/filter.c src/string_dict.c src/bitmap.c src/schema_registry.c src/simd_kernels.c src/storage.c src/sparse_index.c src/tokenizer.c src/fts.c src/deletion_vector.c src/table.c)
+add_library(simpledb_lib STATIC src/db.c src/allocator.c src/mmap_file.c src/filter.c src/string_dict.c src/bitmap.c src/schema_registry.c src/simd_kernels.c src/storage.c src/sparse_index.c src/tokenizer.c src/fts.c src/deletion_vector.c src/table.c src/external_sort.c src/min_heap.c)
 enable_project_warnings(simpledb_lib)
 
 # Main Database REPL Executable Target

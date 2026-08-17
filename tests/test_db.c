@@ -13,6 +13,7 @@
 #include "simpledb/fts.h"
 #include "simpledb/deletion_vector.h"
 #include "simpledb/table.h"
+#include "simpledb/external_sort.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -783,6 +784,123 @@ static void test_table_flush_e2e(void) {
     printf("Table Flush E2E tests passed!\n");
 }
 
+static void test_external_sorter_in_memory(void) {
+    printf("Testing External Sorter (In-Memory Fallback)...\n");
+
+    external_sorter_t *sorter = external_sorter_create(".", 20);
+    assert(sorter != NULL);
+
+    sort_record_t input[5] = {
+        { 40, 1 }, { 10, 2 }, { 50, 3 }, { 20, 4 }, { 30, 5 }
+    };
+    assert(external_sorter_push(sorter, input, 5) == 0);
+    assert(external_sorter_finish(sorter) == 0);
+
+    sort_record_t rec;
+    int32_t expected_keys[5] = { 10, 20, 30, 40, 50 };
+    for (int i = 0; i < 5; i++) {
+        assert(external_sorter_next(sorter, &rec) == true);
+        assert(rec.key == expected_keys[i]);
+    }
+    assert(external_sorter_next(sorter, &rec) == false);
+
+    external_sorter_destroy(sorter);
+    printf("External Sorter In-Memory tests passed!\n");
+}
+
+static void test_external_sorter_disk_spilling(void) {
+    printf("Testing External Sorter (Disk-Spilling K-Way Merge)...\n");
+
+    size_t mem_limit = 100;
+    size_t total_records = 1000;
+    external_sorter_t *sorter = external_sorter_create(".", mem_limit);
+    assert(sorter != NULL);
+
+    sort_record_t *input = malloc(sizeof(sort_record_t) * total_records);
+    for (size_t i = 0; i < total_records; i++) {
+        input[i].key = (int32_t)(total_records - i); // Reverse sorted keys
+        input[i].row_id = (int32_t)i;
+    }
+
+    for (size_t i = 0; i < total_records; i += 50) {
+        assert(external_sorter_push(sorter, input + i, 50) == 0);
+    }
+    free(input);
+
+    assert(external_sorter_finish(sorter) == 0);
+    assert(sorter->num_runs == 10);
+
+    sort_record_t rec;
+    int32_t prev_key = -1;
+    size_t count = 0;
+
+    while (external_sorter_next(sorter, &rec)) {
+        if (count > 0) {
+            assert(rec.key >= prev_key);
+        }
+        prev_key = rec.key;
+        count++;
+    }
+
+    assert(count == total_records);
+    assert(prev_key == (int32_t)total_records);
+
+    external_sorter_destroy(sorter);
+    printf("External Sorter Disk-Spilling tests passed!\n");
+}
+
+static void test_min_heap(void) {
+    printf("Testing Standalone Min-Heap Priority Queue (Key + Payload)...\n");
+    min_heap_t *heap = min_heap_create(10);
+    assert(heap != NULL);
+    assert(heap->size == 0);
+
+    const char *payloads[5] = { "stream_0", "stream_1", "stream_2", "stream_3", "stream_4" };
+
+    // 1. Push elements in arbitrary unsorted sequence
+    assert(min_heap_push(heap, 50, (void *)payloads[0]) == 0);
+    assert(min_heap_push(heap, 20, (void *)payloads[1]) == 0);
+    assert(min_heap_push(heap, 40, (void *)payloads[2]) == 0);
+    assert(min_heap_push(heap, 10, (void *)payloads[3]) == 0);
+    assert(min_heap_push(heap, 30, (void *)payloads[4]) == 0);
+
+    assert(heap->size == 5);
+
+    // 2. Peek champion at root (must be 10 without removing it)
+    heap_node_t node;
+    assert(min_heap_peek(heap, &node) == true);
+    assert(node.key == 10);
+    assert(node.payload == (void *)payloads[3]);
+
+    // 3. Pop elements one by one - must emerge in strict ascending sorted order!
+    int64_t expected_keys[5] = { 10, 20, 30, 40, 50 };
+    const char *expected_payloads[5] = { "stream_3", "stream_1", "stream_4", "stream_2", "stream_0" };
+    for (int i = 0; i < 5; i++) {
+        assert(min_heap_pop(heap, &node) == true);
+        assert(node.key == expected_keys[i]);
+        assert(node.payload == (void *)expected_payloads[i]);
+    }
+
+    // 4. Verify empty heap state
+    assert(heap->size == 0);
+    assert(min_heap_pop(heap, &node) == false);
+    assert(min_heap_peek(heap, &node) == false);
+
+    // 5. Test min_heap_replace_top (O(log K) replacement)
+    assert(min_heap_push(heap, 100, (void *)payloads[0]) == 0);
+    assert(min_heap_push(heap, 200, (void *)payloads[1]) == 0);
+    assert(min_heap_replace_top(heap, 300, (void *)payloads[2]) == true);
+    assert(min_heap_peek(heap, &node) == true);
+    assert(node.key == 200);
+
+    min_heap_destroy(heap);
+    (void)payloads;
+    (void)node;
+    (void)expected_keys;
+    (void)expected_payloads;
+    printf("Standalone Min-Heap tests passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -807,6 +925,9 @@ int main(void) {
     test_table_creation();
     test_table_e2e_batch_ingestion();
     test_table_flush_e2e();
+    test_min_heap();
+    test_external_sorter_in_memory();
+    test_external_sorter_disk_spilling();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

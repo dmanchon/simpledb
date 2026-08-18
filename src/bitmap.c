@@ -1,4 +1,4 @@
-#include "simpledb/null_bitmap.h"
+#include "simpledb/bitmap.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -6,10 +6,10 @@
 
 #include <stdio.h>
 
-null_bitmap_t *null_bitmap_create(size_t initial_capacity_bytes) {
-    null_bitmap_t *bitmap = malloc(sizeof(null_bitmap_t));
+bitmap_t *bitmap_create(size_t initial_capacity_bytes) {
+    bitmap_t *bitmap = malloc(sizeof(bitmap_t));
     if(!bitmap) {
-        fprintf(stderr, "[FATAL ERROR] null_bitmap_create failed to allocate null_bitmap_t struct\n");
+        fprintf(stderr, "[FATAL ERROR] bitmap_create failed to allocate bitmap_t struct\n");
         exit(EXIT_FAILURE);
     }
     bitmap->size = 0;
@@ -17,20 +17,20 @@ null_bitmap_t *null_bitmap_create(size_t initial_capacity_bytes) {
 
     bitmap->bits = (uint8_t *)calloc(initial_capacity_bytes, sizeof(uint8_t));
     if(!bitmap->bits) {
-        fprintf(stderr, "[FATAL ERROR] null_bitmap_create failed to allocate %zu bytes for bit array\n", initial_capacity_bytes);
+        fprintf(stderr, "[FATAL ERROR] bitmap_create failed to allocate %zu bytes for bit array\n", initial_capacity_bytes);
         exit(EXIT_FAILURE);
     }
     return bitmap;
 }
 
-void null_bitmap_free(null_bitmap_t *bitmap) {
+void bitmap_free(bitmap_t *bitmap) {
     if(!bitmap) return;
 
     free(bitmap->bits);
     free(bitmap);
 }
 
-void null_bitmap_set_null(null_bitmap_t *bitmap, size_t index) {
+void bitmap_set(bitmap_t *bitmap, size_t index) {
     size_t slot = index / 8;
     if(slot >= bitmap->capacity) {
         fprintf(stderr, "[FATAL ERROR] null_bitmap index out of bounds\n");
@@ -39,7 +39,7 @@ void null_bitmap_set_null(null_bitmap_t *bitmap, size_t index) {
     bitmap->bits[slot] |= 1<<(index%8);
 }
 
-void null_bitmap_clear_null(null_bitmap_t *bitmap, size_t index) {
+void bitmap_clear(bitmap_t *bitmap, size_t index) {
     size_t slot = index / 8;
     if(slot >= bitmap->capacity) {
         fprintf(stderr, "[FATAL ERROR] null_bitmap index out of bounds\n");
@@ -48,7 +48,7 @@ void null_bitmap_clear_null(null_bitmap_t *bitmap, size_t index) {
     bitmap->bits[slot] &= ~(1<<(index%8));
 }
 
-bool null_bitmap_is_null(const null_bitmap_t *bitmap, size_t index) {
+bool bitmap_is_set(const bitmap_t *bitmap, size_t index) {
     size_t slot = index / 8;
     if(slot >= bitmap->capacity) {
         return false;

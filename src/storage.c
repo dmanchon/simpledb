@@ -24,6 +24,8 @@ column_writer_t *column_writer_create(const char *part_dir, const char *col_name
     writer->type = type;
     writer->rows_written = 0;
 
+    writer->num_indexes = 0;
+
     return writer;
 }
 
@@ -34,8 +36,13 @@ void column_writer_append(column_writer_t* writer, const void* data, size_t num_
     // In the future this should be derived from writer->type.
     size_t element_size = 4;
     size_t bytes_to_write = num_rows * element_size;
-    
+
     fwrite(data, 1, bytes_to_write, writer->bin_fp);
+
+    for (size_t i = 0; i < writer->num_indexes; i++) {
+        writer->indexes[i]->append_fn(writer->indexes[i], data, num_rows, writer->rows_written);
+    }
+
     writer->rows_written += num_rows;
 }
 
@@ -46,4 +53,12 @@ void column_writer_close(column_writer_t* writer) {
         }
         free(writer);
     }
+}
+
+void column_writer_attach_index(column_writer_t* writer, index_writer_t* index) {
+    if (writer->num_indexes >= MAX_INDEXES_PER_COLUMN) {
+        fprintf(stderr, "[FATAL ERROR] Column has too many indexes\n");
+        exit(EXIT_FAILURE);
+    }
+    writer->indexes[writer->num_indexes++] = index;
 }

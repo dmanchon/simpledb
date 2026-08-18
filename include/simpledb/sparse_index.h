@@ -3,29 +3,34 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "simpledb/bitmap.h"
+#include "simpledb/storage.h"
 
-// Represents a contiguous range of granules to scan
+// The physical header written at the very beginning of every .idx file
 typedef struct {
-    uint32_t start_granule; // Inclusive
-    uint32_t end_granule;   // Exclusive
-} granule_range_t;
+    uint32_t magic;      // e.g., 0x5052494D ('P' 'R' 'I' 'M')
+    uint32_t version;    // e.g., 1
+    size_t num_marks;    // Number of 32-bit marks that follow this header
+    int32_t min_val;     // Absolute minimum value for the entire part
+    int32_t max_val;     // Absolute maximum value for the entire part
+} sparse_index_file_header_t;
 
 // The in-memory representation of the primary.idx file
 typedef struct {
-    int32_t* marks;     // Array of primary key values, one per granule
-    size_t num_marks;   // Number of granules
-    int32_t min_val;    // Absolute min for the entire part
-    int32_t max_val;    // Absolute max for the entire part
+    sparse_index_file_header_t header; // Embedded physical metadata
+    int32_t* marks;                    // Array of primary key values, one per granule
 } sparse_index_t;
 
+// --- Read-Path ---
 // Load a sparse index from disk
 sparse_index_t* sparse_index_load(const char* idx_file_path);
 
 // Free the index
 void sparse_index_free(sparse_index_t* idx);
 
-// 2-Tier Pruning logic: Find which granules might contain the target_val
-// Tier 1: Check [min_val, max_val] to see if the part should be skipped entirely
-// Tier 2: Binary search the marks to find the [start, end) granule range
-// Returns true if a valid range is found, false if the target_val is definitely not in this part.
-bool sparse_index_search(const sparse_index_t* idx, int32_t target_val, granule_range_t* out_range);
+// 2-Tier Pruning logic
+bool sparse_index_search(const sparse_index_t* idx, int32_t target_val, bitmap_t* out_mask);
+
+// --- Write-Path Factory ---
+// Creates the concrete index plugin used by storage.c to write the index
+struct index_writer_t* sparse_index_writer_create(const char* part_dir, const char* col_name);

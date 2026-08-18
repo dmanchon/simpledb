@@ -14,6 +14,7 @@
 #include "simpledb/deletion_vector.h"
 #include "simpledb/table.h"
 #include "simpledb/external_sort.h"
+#include "simpledb/grace_hash_agg.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -901,6 +902,38 @@ static void test_min_heap(void) {
     printf("Standalone Min-Heap tests passed!\n");
 }
 
+static void test_grace_hash_agg(void) {
+    printf("Testing Partitioned Grace Hash Aggregation...\n");
+    // Memory limit of 100 records, 4 partitions
+    grace_hash_agg_t *agg = grace_hash_agg_create("test_grace_agg_tmp", 100, 4);
+    assert(agg != NULL);
+
+    size_t total_records = 500; // Will force spilling
+    agg_input_record_t *records = malloc(total_records * sizeof(agg_input_record_t));
+    for (size_t i = 0; i < total_records; i++) {
+        records[i].group_key = i % 10; // 10 unique groups
+        records[i].agg_value = 5;
+    }
+
+    assert(grace_hash_agg_push(agg, records, total_records) == 0);
+    assert(grace_hash_agg_finish(agg) == 0);
+
+    agg_output_record_t out_rec;
+    size_t out_count = 0;
+    while (grace_hash_agg_next(agg, &out_rec)) {
+        assert(out_rec.count_value == 50);
+        assert(out_rec.sum_value == 250);
+        out_count++;
+    }
+
+    assert(out_count == 10); // 10 unique groups
+
+    grace_hash_agg_destroy(agg);
+    remove("test_grace_agg_tmp");
+    free(records);
+    printf("Grace Hash Aggregation tests passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -928,6 +961,7 @@ int main(void) {
     test_min_heap();
     test_external_sorter_in_memory();
     test_external_sorter_disk_spilling();
+    test_grace_hash_agg();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

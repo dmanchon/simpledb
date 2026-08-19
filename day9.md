@@ -1,4 +1,4 @@
-# Day 9: Streaming Uncompressed Storage (The YAGNI Pivot)
+# Day 9: Streaming Uncompressed Storage 
 
 As our analytical database scales up to processing billions of rows, keeping everything purely in memory is no longer an option. We must flush our in-memory column arrays to disk to create immutable historical blocks (often called "parts").
 

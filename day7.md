@@ -1,8 +1,8 @@
-# Day 7: Null Bitmaps & Dynamic Schema Registry
+# Day 7: Bitmaps & Dynamic Schema Registry
 
 In analytical databases, handling missing or `NULL` data efficiently is crucial. Storing a dedicated flag per value (like a boolean array) wastes significant memory bandwidth. Similarly, ingesting modern data often involves semi-structured, schema-less formats like JSON, requiring the database to discover and manage schemas dynamically on the fly.
 
-Today we tackle both: implementing **Null Bitmaps** to track validity at a cost of just 1 bit per row, and building a **Dynamic Schema Registry** that parses schema-less JSON events directly into columnar array buffers.
+Today we tackle both: implementing **Bitmaps** to track validity at a cost of just 1 bit per row, and building a **Dynamic Schema Registry** that parses schema-less JSON events directly into columnar array buffers.
 
 ---
 
@@ -16,7 +16,7 @@ In analytical workloads, data is often sparse or missing. We need a way to mark 
 2. **Boolean Arrays (`bool is_null[N]`):**
    - *Drawback:* In C, a `bool` takes up 1 full byte (8 bits). If you have 1 million rows, you are wasting 1 Megabyte of memory bandwidth just to read the null states. This destroys cache locality.
 
-### Our Approach: Bit-Packed Null Bitmaps
+### Our Approach: Bit-Packed Bitmaps
 We use a single bit per row. An array of 1,000,000 rows takes exactly 125 KB instead of 1 MB. Furthermore, using bits allows us to perform blazing-fast bitwise `AND`/`OR` operations across multiple columns simultaneously without looping, making null-aware filtering extremely cheap.
 
 ## 2. Dynamic Schema Registry
@@ -63,15 +63,15 @@ This avoids hash map overhead and maintains spatial locality for sequential scan
 ### Floats and Nullability
 The registry extends beyond integers:
 1. **Floats (`f32`):** `COL_TYPE_F32` routes decimal values (e.g., `3.14`) to a `buffer_f32_t` array, preserving IEEE 754 floating-point precision.
-2. **Nullability:** All column types (`i32`, `f32`, `String`) are nullable. The null state is stored out-of-band in the `null_bitmap_t`. This keeps the numeric arrays perfectly dense for SIMD vectorization while the bitmap tracks missing data.
+2. **Nullability:** All column types (`i32`, `f32`, `String`) are nullable. The null state is stored out-of-band in the `bitmap_t`. This keeps the numeric arrays perfectly dense for SIMD vectorization while the bitmap tracks missing data.
 
 ---
 
 ## 3. Header File Signatures
 
-To implement the null bitmap and schema registry, you will need to implement the following header contracts:
+To implement the bitmap and schema registry, you will need to implement the following header contracts:
 
-### `null_bitmap.h`
+### `bitmap.h`
 ```c
 #pragma once
 
@@ -83,19 +83,19 @@ typedef struct {
     uint8_t* bits;
     size_t   size;      // Number of tracked bits (rows)
     size_t   capacity;  // Allocated capacity in bytes
-} null_bitmap_t;
+} bitmap_t;
 
-null_bitmap_t* null_bitmap_create(size_t initial_capacity_bytes);
-void           null_bitmap_free(null_bitmap_t* bitmap);
+bitmap_t* bitmap_create(size_t initial_capacity_bytes);
+void           bitmap_free(bitmap_t* bitmap);
 
 // Set the bit at `index` to 1 (meaning the value IS NULL)
-void null_bitmap_set_null(null_bitmap_t* bitmap, size_t index);
+void bitmap_set_null(bitmap_t* bitmap, size_t index);
 
 // Set the bit at `index` to 0 (meaning the value is NOT NULL)
-void null_bitmap_clear_null(null_bitmap_t* bitmap, size_t index);
+void bitmap_clear_null(bitmap_t* bitmap, size_t index);
 
 // Check if the value at `index` is NULL
-bool null_bitmap_is_null(const null_bitmap_t* bitmap, size_t index);
+bool bitmap_is_null(const bitmap_t* bitmap, size_t index);
 ```
 
 ### `schema_registry.h`
@@ -141,7 +141,7 @@ int32_t schema_registry_get_column_index(const schema_registry_t* registry, cons
 ### A Note on Memory Allocation in C
 When building database structures, a common pitfall is confusing the allocation of the metadata container (the struct) with the allocation of the backing data buffer. 
 
-For example, when creating the null bitmap, we cannot simply `calloc` the required bit capacity and assign it to the `null_bitmap_t*` pointer. Doing so means any struct field assignments (like `bitmap->size = 0`) will overwrite the first few bytes of the raw bit array, and the internal pointer (`bitmap->bits`) will remain uninitialized. We must always perform two distinct allocations: one for the struct itself, and one for the internal buffer it manages.
+For example, when creating the bitmap, we cannot simply `calloc` the required bit capacity and assign it to the `bitmap_t*` pointer. Doing so means any struct field assignments (like `bitmap->size = 0`) will overwrite the first few bytes of the raw bit array, and the internal pointer (`bitmap->bits`) will remain uninitialized. We must always perform two distinct allocations: one for the struct itself, and one for the internal buffer it manages.
 
 ### Hardware-Level Bit Manipulation
 To set, clear, or check a bit, we use standard bitwise math. But *why* do we do this instead of just using an `if` statement or an array of booleans? 
@@ -163,11 +163,11 @@ Notice the careful decisions made in the bitwise logic below:
 
 ### Bit-Packing Operations
 ```c
-null_bitmap_t *null_bitmap_create(size_t initial_capacity_bytes) {
+bitmap_t *bitmap_create(size_t initial_capacity_bytes) {
     // 1. Allocate the metadata struct
-    null_bitmap_t *bitmap = malloc(sizeof(null_bitmap_t));
+    bitmap_t *bitmap = malloc(sizeof(bitmap_t));
     if(!bitmap) {
-        fprintf(stderr, "[FATAL ERROR] null_bitmap_create failed to allocate null_bitmap_t struct\n");
+        fprintf(stderr, "[FATAL ERROR] bitmap_create failed to allocate bitmap_t struct\n");
         exit(EXIT_FAILURE);
     }
     
@@ -177,39 +177,39 @@ null_bitmap_t *null_bitmap_create(size_t initial_capacity_bytes) {
     // 2. Allocate the raw bit buffer and zero it out (default to NOT NULL)
     bitmap->bits = (uint8_t *)calloc(initial_capacity_bytes, sizeof(uint8_t));
     if(!bitmap->bits) {
-        fprintf(stderr, "[FATAL ERROR] null_bitmap_create failed to allocate %zu bytes for bit array\n", initial_capacity_bytes);
+        fprintf(stderr, "[FATAL ERROR] bitmap_create failed to allocate %zu bytes for bit array\n", initial_capacity_bytes);
         exit(EXIT_FAILURE);
     }
     
     return bitmap;
 }
 
-void null_bitmap_free(null_bitmap_t *bitmap) {
+void bitmap_free(bitmap_t *bitmap) {
     if(!bitmap) return;
 
     free(bitmap->bits);
     free(bitmap);
 }
 
-void null_bitmap_set_null(null_bitmap_t *bitmap, size_t index) {
+void bitmap_set_null(bitmap_t *bitmap, size_t index) {
     size_t slot = index / 8;
     if(slot >= bitmap->capacity) {
-        fprintf(stderr, "[FATAL ERROR] null_bitmap index out of bounds\n");
+        fprintf(stderr, "[FATAL ERROR] bitmap index out of bounds\n");
         exit(EXIT_FAILURE);
     }
     bitmap->bits[slot] |= 1<<(index%8);
 }
 
-void null_bitmap_clear_null(null_bitmap_t *bitmap, size_t index) {
+void bitmap_clear_null(bitmap_t *bitmap, size_t index) {
     size_t slot = index / 8;
     if(slot >= bitmap->capacity) {
-        fprintf(stderr, "[FATAL ERROR] null_bitmap index out of bounds\n");
+        fprintf(stderr, "[FATAL ERROR] bitmap index out of bounds\n");
         exit(EXIT_FAILURE);
     }
     bitmap->bits[slot] &= ~(1<<(index%8));
 }
 
-bool null_bitmap_is_null(const null_bitmap_t *bitmap, size_t index) {
+bool bitmap_is_null(const bitmap_t *bitmap, size_t index) {
     size_t slot = index / 8;
     if(slot >= bitmap->capacity) {
         return false;
@@ -298,31 +298,31 @@ int32_t schema_registry_add_column(schema_registry_t *registry, const char *name
 
 ## 5. Final Tests
 
-Here is the test harness you can use to verify your implementations of the null bitmap and schema registry once you have written the code.
+Here is the test harness you can use to verify your implementations of the bitmap and schema registry once you have written the code.
 
 ```c
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
-#include "null_bitmap.h"
+#include "bitmap.h"
 #include "schema_registry.h"
 
-void test_null_bitmap() {
-    printf("Testing Null Bitmap...\n");
-    null_bitmap_t* bmp = null_bitmap_create(8); // 8 bytes = 64 bits
+void test_bitmap() {
+    printf("Testing Bitmap...\n");
+    bitmap_t* bmp = bitmap_create(8); // 8 bytes = 64 bits
     
     // Initially everything should be NOT NULL (0) if zero-initialized
-    assert(null_bitmap_is_null(bmp, 5) == false);
+    assert(bitmap_is_null(bmp, 5) == false);
     
-    null_bitmap_set_null(bmp, 5);
-    assert(null_bitmap_is_null(bmp, 5) == true);
-    assert(null_bitmap_is_null(bmp, 4) == false);
+    bitmap_set_null(bmp, 5);
+    assert(bitmap_is_null(bmp, 5) == true);
+    assert(bitmap_is_null(bmp, 4) == false);
     
-    null_bitmap_clear_null(bmp, 5);
-    assert(null_bitmap_is_null(bmp, 5) == false);
+    bitmap_clear_null(bmp, 5);
+    assert(bitmap_is_null(bmp, 5) == false);
     
-    null_bitmap_free(bmp);
-    printf("Null Bitmap tests passed!\n");
+    bitmap_free(bmp);
+    printf("Bitmap tests passed!\n");
 }
 
 void test_schema_registry() {
@@ -347,7 +347,7 @@ void test_schema_registry() {
 }
 
 int main() {
-    test_null_bitmap();
+    test_bitmap();
     test_schema_registry();
     printf("All Day 7 tests passed!\n");
     return 0;

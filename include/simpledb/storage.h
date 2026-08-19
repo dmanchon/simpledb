@@ -43,4 +43,33 @@ void column_writer_append(column_writer_t* writer, const void* data, size_t num_
 // Close files and free resources
 void column_writer_close(column_writer_t* writer);
 
-void column_writer_attach_index(column_writer_t* writer, index_writer_t* index);
+// New API function to inject an index from the outside
+void column_writer_attach_index(column_writer_t* writer, struct index_writer_t* index);
+
+
+// ==========================================
+// COLUMN READER (READ-PATH)
+// ==========================================
+
+#include "simpledb/mmap_file.h"
+#include "simpledb/slice.h"
+#include "simpledb/bitmap.h"
+
+typedef struct {
+    mmap_file_t* mmap;          // The memory-mapped .bin file
+    column_type_t type;         // I32, F32, etc.
+    const bitmap_t* mask;       // The mask from the Sparse Index!
+    size_t total_granules;      // Total granules in the file
+    size_t current_granule_idx; // Iterator state
+} column_reader_t;
+
+// 1. Open a column for reading. 
+// If mask is NULL, it assumes a full table scan (reads everything).
+column_reader_t* column_reader_create(const char* part_dir, const char* col_name, column_type_t type, const bitmap_t* mask);
+
+// 2. Fetch the next matching Granule. 
+// Returns a slice_i32_t. If len == 0, we have reached the end of the file.
+slice_i32_t column_reader_next_granule_i32(column_reader_t* reader);
+
+// 3. Clean up
+void column_reader_free(column_reader_t* reader);

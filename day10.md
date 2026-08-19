@@ -266,7 +266,7 @@ With the Bitmap strategy in mind, we can draft the Read-Path data structures in 
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include "simpledb/null_bitmap.h"
+#include "simpledb/bitmap.h"
 #include "simpledb/storage.h"
 
 // The physical header written at the very beginning of every .idx file
@@ -451,3 +451,224 @@ void test_sparse_index_e2e(void) {
 This E2E test guarantees that our C binary serialization logic (`fwrite`/`fread`) exactly matches our struct definitions, preventing any alignment or padding bugs from sneaking into production!
 
 ---
+
+## 11. The Final Implementation (sparse_index.c)
+
+Since this was a highly educational exercise, here is the final, completely working implementation of the Sparse Index that we built together, including the fast-fail bounds checks, the O(log N) binary search, and the zero-copy file header formatting.
+
+```c
+#include "simpledb/sparse_index.h"
+#include "simpledb/bitmap.h"
+#include "simpledb/storage.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct {
+    FILE *idx_fp;
+    int32_t min_val;
+    int32_t max_val;
+    size_t num_marks;
+} sparse_index_writer_state_t;
+
+static void sparse_index_writer_append(index_writer_t *self, const void *data, size_t num_rows,
+                                       uint64_t current_row_offset) {
+    sparse_index_writer_state_t *state = (sparse_index_writer_state_t *)self->state;
+    const int32_t *values = (const int32_t *)data;
+    if (num_rows == 0)
+        return;
+
+    // Since the data is sorted
+    if (state->num_marks == 0 && current_row_offset == 0) {
+        state->min_val = values[0];
+    }
+    state->max_val = values[num_rows - 1];
+
+    // We can do this because data has constant size (i32), once it will become compressed or
+    // we hold strings we will need to create a granule map
+    size_t i = 0;
+    if (current_row_offset % 8192 != 0) {
+        i = 8192 - (current_row_offset % 8192); // Jump to the first boundary in this chunk
+    }
+
+    // since data is sorted
+    while (i < num_rows) {
+        fwrite(&values[i], sizeof(int32_t), 1, state->idx_fp);
+        state->num_marks++;
+        i += 8192;
+    }
+}
+
+static void sparse_index_writer_close(index_writer_t *self) {
+    sparse_index_writer_state_t *state = (sparse_index_writer_state_t *)self->state;
+    sparse_index_file_header_t header = {.max_val = state->max_val,
+                                         .min_val = state->min_val,
+                                         .num_marks = state->num_marks,
+                                         .magic = 0x5052494D,
+                                         .version = 1};
+    fseek(state->idx_fp, 0, SEEK_SET);
+    fwrite(&header, sizeof(sparse_index_file_header_t), 1, state->idx_fp);
+
+    fclose(state->idx_fp);
+}
+
+struct index_writer_t *sparse_index_writer_create(const char *part_dir, const char *col_name) {
+    index_writer_t *writer = malloc(sizeof(index_writer_t));
+    sparse_index_writer_state_t *state = malloc(sizeof(sparse_index_writer_state_t));
+    state->max_val = 0;
+    state->min_val = 0;
+    state->num_marks = 0;
+
+    char idx_file_path[1024];
+    snprintf(idx_file_path, sizeof(idx_file_path), "%s/%s.idx", part_dir, col_name);
+
+    state->idx_fp = fopen(idx_file_path, "wb");
+    if (!state->idx_fp) {
+        free(writer);
+        free(state);
+        return NULL;
+    }
+    fseek(state->idx_fp, sizeof(sparse_index_file_header_t), SEEK_SET);
+
+    writer->state = state;
+    writer->append_fn = sparse_index_writer_append;
+    writer->close_fn = sparse_index_writer_close;
+
+    return writer;
+}
+
+void sparse_index_free(sparse_index_t *idx) {
+    free(idx->marks);
+    free(idx);
+}
+
+bool sparse_index_search(const sparse_index_t *idx, int32_t target_val, bitmap_t *out_mask) {
+
+    if (target_val < idx->header.min_val || target_val > idx->header.max_val) {
+        return false;
+    }
+
+    size_t low = 0;
+    size_t high = idx->header.num_marks - 1;
+    size_t match_idx = 0;
+
+    while (low <= high) {
+        size_t mid = low + (high - low) / 2;
+
+        if (idx->marks[mid] <= target_val) {
+            match_idx = mid; // This is a valid candidate
+            low = mid + 1;   // But check if there is a larger valid one
+        } else {
+            high = mid - 1;  // This mark is too big
+        }
+    }
+
+    bitmap_set(out_mask, match_idx);
+    return true;
+}
+
+sparse_index_t *sparse_index_load(const char *idx_file_path) {
+    sparse_index_t *idx = malloc(sizeof(sparse_index_t));
+    FILE *fp = fopen(idx_file_path, "rb");
+    if (!fp) {
+        free(idx);
+        return NULL;
+    }
+
+    fread(&idx->header, sizeof(sparse_index_file_header_t), 1, fp);
+    if (idx->header.magic != 0x5052494D || idx->header.version != 1) {
+        fclose(fp);
+        free(idx);
+        return NULL;
+    }
+
+    idx->marks = malloc(sizeof(int32_t)*idx->header.num_marks);
+    if (!idx->marks) {
+        fclose(fp);
+        free(idx);
+        return NULL;
+    }
+
+    fread(idx->marks, sizeof(int32_t), idx->header.num_marks, fp);
+
+    fclose(fp);
+    return idx;
+}
+```
+
+## 12. The Final Implementation (storage.c)
+
+You also noticed that Day 10 required us to modify `storage.c` to add the plugin architecture (so `column_writer_t` could notify the index writers). Here is the final implementation of the `column_writer` bridging Day 9 and Day 10!
+
+```c
+#include "simpledb/storage.h"
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+column_writer_t *column_writer_create(const char *part_dir, const char *col_name,
+                                      column_type_t type) {
+
+    column_writer_t *writer = malloc(sizeof(column_writer_t));
+    if (!writer) return NULL;
+
+    char bin_file_path[1024];
+    snprintf(bin_file_path, sizeof(bin_file_path), "%s/%s.bin", part_dir, col_name);
+
+    writer->bin_fp = fopen(bin_file_path, "wb");
+    if (!writer->bin_fp) {
+        free(writer);
+        return NULL;
+    }
+
+    writer->column_name = col_name;
+    writer->type = type;
+    writer->rows_written = 0;
+
+    // Day 10: Initialize the index array to 0
+    writer->num_indexes = 0;
+
+    return writer;
+}
+
+void column_writer_append(column_writer_t* writer, const void* data, size_t num_rows) {
+    if (num_rows == 0) return;
+
+    // For now we assume all types (I32, F32, STRING_DICT) are 4 bytes.
+    // In the future this should be derived from writer->type.
+    size_t element_size = 4;
+    size_t bytes_to_write = num_rows * element_size;
+
+    // Write the raw bytes to the .bin file
+    fwrite(data, 1, bytes_to_write, writer->bin_fp);
+
+    // Day 10: Broadcast the chunk to all attached Index plugins!
+    for (size_t i = 0; i < writer->num_indexes; i++) {
+        writer->indexes[i]->append_fn(writer->indexes[i], data, num_rows, writer->rows_written);
+    }
+
+    writer->rows_written += num_rows;
+}
+
+void column_writer_close(column_writer_t* writer) {
+    if (writer) {
+        if (writer->bin_fp) {
+            fclose(writer->bin_fp);
+        }
+        free(writer);
+    }
+}
+
+// Day 10: The API to attach a new index plugin
+void column_writer_attach_index(column_writer_t* writer, index_writer_t* index) {
+    if (writer->num_indexes >= MAX_INDEXES_PER_COLUMN) {
+        fprintf(stderr, "[FATAL ERROR] Column has too many indexes\n");
+        exit(EXIT_FAILURE);
+    }
+    writer->indexes[writer->num_indexes++] = index;
+}
+```

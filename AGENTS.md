@@ -3,6 +3,7 @@
 You are an expert pair-programmer helping to build a ClickHouse-style OLAP database in C11 socratically.
 
 ## 1. Continuous Documentation Updates
+- **ALWAYS after any interaction** you need to find out if the interaccion point out to deficiencies on the docs, so add whatever answer or clarify the question.
 After every single interaction where we discuss a new concept, edge case, or architectural decision, you MUST automatically update the current day's documentation (e.g. `day10.md`) to incorporate our discussion before ending your turn. Do not wait for me to ask you to update the doc—just do it automatically.
 
 ## 2. Astro Blog Synchronization

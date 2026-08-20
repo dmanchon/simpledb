@@ -1,32 +1,28 @@
 # Day 8: SIMD APL Vector Primitives (Compress & Reduction)
 
-In APL and K/q, the fundamental way to filter data isn't with `for` loops and `if` statements—it's with an operator called **Compress** (often written as `X / Y` or `where X`). 
+In APL and K/q, the fundamental way to filter data does not rely on `for` loops and `if` statements. It utilizes an operator called **Compress** (often written as `X / Y` or `where X`). 
 
-When analyzing millions of rows, traditional `if` statements ruin performance because of **branch misprediction**. If the CPU mispredicts whether a row matches a filter, it has to flush its entire instruction pipeline, wasting 15-20 clock cycles per mistake.
+When analyzing millions of rows, traditional `if` statements degrade performance because of **branch misprediction**. If the CPU mispredicts whether a row matches a filter, it must flush its entire instruction pipeline, wasting 15 to 20 clock cycles per misprediction.
 
-Today, we will build a **SIMD-friendly Compress kernel** in pure C11. By writing tight, branchless loops, we allow modern compilers (Clang/GCC) to automatically vectorize our code into ARM Neon or Intel AVX2 intrinsics, processing 8 to 16 elements per clock cycle!
+This section covers building a **SIMD-friendly Compress kernel** in C11. Utilizing the branchless SIMD foundations established in Day 5, we allow modern compilers (Clang/GCC) to automatically vectorize code into ARM Neon or Intel AVX2 intrinsics, processing 8 to 16 elements per clock cycle.
 
----
+## Columnar Execution in Pandas, ClickHouse, and DuckDB
 
-## The Secret Sauce of Pandas, ClickHouse, and DuckDB
-
-If you have ever used Python's Pandas or NumPy, you have already used these exact primitives. When you write Python code like this:
+Vectorized systems like Python's Pandas or NumPy use these primitives. For example:
 ```python
 filtered_df = df[df['score'] > 90]
 ```
-Python itself is far too slow to evaluate this row-by-row. Instead, Pandas delegates the work to a highly optimized C/C++ kernel exactly like the one we are building today. 
+Rather than evaluating this row-by-row in Python, Pandas delegates the work to a highly optimized C/C++ kernel similar to the one implemented here. 
 1. It generates a boolean array (`1` if score > 90, `0` otherwise).
 2. It calls a native C `compress` function to densely pack the matching rows.
 
-This same architecture—vectorized block execution and branchless SIMD compress kernels—is the exact reason why **ClickHouse** and **DuckDB** are so ferociously fast. They don't process data row-by-row; they process data in columnar chunks (usually 1,024 to 8,192 elements at a time), blasting them through tight C/C++ SIMD loops. What we are building today is the literal engine block that gives those systems their raw power.
-
----
+This architecture (vectorized block execution and branchless SIMD compress kernels) is fundamental to systems like **ClickHouse** and **DuckDB**. They process data in columnar chunks (usually 1,024 to 8,192 elements at a time) through compiled C/C++ SIMD loops.
 
 ## 1. The SIMD Kernels Header
 
-We will define two fundamental APL primitives:
-1. **Compress**: Takes a boolean mask (1s and 0s) and a source array. It "compresses" the source array, extracting only the elements where the mask is `1`, writing them contiguously to a destination array.
-2. **Sum Reduction**: A heavily optimized loop that sums an array of integers.
+The implementation defines two fundamental APL primitives:
+1. **Compress**: Takes a boolean mask (1s and 0s) and a source array. It extracts only the elements where the mask is `1`, writing them contiguously to a destination array.
+2. **Sum Reduction**: An optimized loop that sums an array of integers.
 
 ### `simd_kernels.h`
 ```c
@@ -47,15 +43,13 @@ size_t simd_compress_i32(const int32_t* restrict src,
 int64_t simd_sum_i32(const int32_t* restrict src, size_t n);
 ```
 
----
-
 ## 2. Why `restrict`?
 
-Notice the `restrict` keyword in our pointer arguments. This is a critical C11 feature for high-performance databases. 
+The `restrict` keyword in the pointer arguments is a necessary C11 feature for high-performance execution. 
 
-In C, the compiler always assumes that two pointers *might* point to the exact same memory address (a problem called **pointer aliasing**). If `src` and `dst` overlap, the compiler cannot safely use SIMD instructions to load/store multiple values at once, because writing to `dst` might accidentally overwrite the next values to be read from `src`.
+In C, the compiler assumes that two pointers might point to the exact same memory address, known as **pointer aliasing**. If `src` and `dst` overlap, the compiler cannot safely use SIMD instructions to load or store multiple values at once. Writing to `dst` might overwrite the next values to be read from `src`.
 
-By adding `restrict`, we promise the compiler: *"I guarantee these pointers do not overlap."* This single keyword gives Clang/GCC the green light to deploy aggressive SIMD auto-vectorization.
+By adding `restrict`, the compiler is guaranteed that the pointers do not overlap. This keyword allows Clang/GCC to deploy aggressive SIMD auto-vectorization.
 
 ### `simd_kernels.c`
 ```c
@@ -65,9 +59,8 @@ By adding `restrict`, we promise the compiler: *"I guarantee these pointers do n
 size_t simd_compress_i32(const int32_t *restrict src, const uint8_t *restrict mask, int32_t *restrict dst, size_t n) {
     size_t index = 0;
 
-    // This loop is perfectly branchless.
-    // The CPU doesn't have to guess whether the `if` statement is true.
-    // Clang/GCC will heavily vectorize this using SIMD instructions.
+    // This loop is branchless.
+    // Clang/GCC will vectorize this using SIMD instructions.
     for (size_t i = 0; i < n; i++) {
         dst[index] = src[i];
         index += mask[i];
@@ -85,11 +78,9 @@ int64_t simd_sum_i32(const int32_t* restrict src, size_t n) {
 }
 ```
 
----
-
 ## 3. The 4-Million Row Test Harness
 
-Here is the test harness for Day 8. We will generate 4,000,000 random integers and a randomized boolean mask, and then pass them through our `simd_compress_i32` kernel. We will also use POSIX `clock_gettime` to measure just how fast a branchless C11 array primitive can execute!
+This test harness generates 4,000,000 random integers and a randomized boolean mask, then passes them through the `simd_compress_i32` kernel. It uses POSIX `clock_gettime` to measure the execution time of the branchless C11 array primitive.
 
 ```c
 #include <stdio.h>
@@ -117,7 +108,6 @@ void test_simd_primitives() {
     
     assert(src && mask && dst);
     
-    // Generate random data
     for (size_t i = 0; i < NUM_ELEMENTS; i++) {
         src[i] = rand() % 1000;
         mask[i] = (rand() % 100) < 25 ? 1 : 0; // 25% selectivity

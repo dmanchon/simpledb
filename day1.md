@@ -1,6 +1,6 @@
 # Day 1: 64-Byte SIMD Alignment and Dynamic Column Buffers
 
-Analytical database engines like ClickHouse, DuckDB, and MonetDB scan billions of rows per second by aligning memory layouts with hardware cache architecture. In `simpledb`, the foundation begins with 64-byte aligned dynamic column buffers.
+Analytical database engines like ClickHouse, DuckDB, and MonetDB scan billions of rows per second by aligning memory layouts with hardware cache architecture. `simpledb` uses 64-byte aligned dynamic column buffers.
 
 ---
 
@@ -20,7 +20,7 @@ SIMD vector instruction sets operate on wide registers:
    └───────────────────────────────────────────────────────────────┘
 ```
 
-If an array allocation starts at an unaligned memory address, a 64-byte SIMD vector load spans across two physical cache lines. This triggers a cache-line split penalty, forcing the memory controller to issue two DRAM fetches and causing pipeline stalls that reduce scanning throughput.
+If an array allocation starts at an unaligned memory address, a 64-byte SIMD vector load spans across two physical cache lines. This triggers a cache line split penalty, forcing the memory controller to issue two DRAM fetches and causing pipeline stalls that reduce scanning throughput.
 
 To guarantee optimal vector instruction throughput, every column array in `simpledb` is aligned to a 64-byte boundary (`address % 64 == 0`).
 
@@ -73,7 +73,7 @@ Linked List:
 | Architectural Feature | Contiguous Array Buffer (`buffer_i32_t`) | Linked List (`node_t*`) |
 | :- | :- | :- |
 | Memory Layout | 100% Contiguous in RAM | Scattered across heap |
-| CPU Cache Prefetching | Optimal: 1 fetch loads 16 x int32_t into L1 | Pointer-chasing causes L3/RAM misses |
+| CPU Cache Prefetching | 1 fetch loads 16 x int32_t into L1 | Pointer chasing causes L3/RAM misses |
 | SIMD Vectorization | Direct vector execution (4-16 values/cycle) | Impossible due to 64-bit pointer gaps |
 | Memory Overhead | 0% per-element overhead (4 bytes/element) | High overhead (pointer + metadata bloat) |
 | Zero-Copy mmap | Native: `mmap()` file directly casts to pointer | Requires full copy and pointer swizzling |
@@ -88,6 +88,12 @@ To preserve instruction cache (I-Cache) density during execution loops, vector p
 
 ```c
 // [include/simpledb/allocator.h]
+typedef struct {
+    int32_t* data;
+    size_t size;
+    size_t capacity;
+} buffer_i32_t;
+
 void buffer_i32_grow(buffer_i32_t* buf);
 
 // Inlined hot path for element insertion

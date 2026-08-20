@@ -75,10 +75,10 @@ To support multiple column types (`int32_t`, `float`, `int64_t`) without type er
 #include "simpledb/allocator.h"
 
 typedef enum {
-    TYPE_INT32,
-    TYPE_FLOAT,
-    TYPE_INT64,
-    TYPE_DOUBLE
+    COL_TYPE_I32,
+    COL_TYPE_F32,
+    COL_TYPE_I64,
+    COL_TYPE_F64
 } column_type_t;
 
 typedef struct {

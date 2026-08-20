@@ -125,31 +125,36 @@
 - **Data Structures**: `sparse_index_t`, `granule_range_t`, `part_pruner_t`
 - **Daily Code Goal**: Build 2-tier query pruner executing Part-level `[min, max]` filtering and Granule-level `primary.idx` binary search skipping non-matching blocks.
 
-#### 🔹 Day 11: Free-Text Inverted Block Indexing & BM25 Scoring
+#### 🔹 Day 11: The Column Reader (Zero-Copy Data Loading)
+- **The WHY**: We need a pull-based iterator that takes the `bitmap_t` from the Pruner, uses `mmap` to bypass user-space copying, and yields valid 8,192-row Granules to the execution engine.
+- **Data Structures**: `column_reader_t`
+- **Daily Code Goal**: Build zero-copy chunked reader skipping masked-out granules.
+
+#### 🔹 Day 12: Free-Text Inverted Block Indexing & BM25 Scoring
 - **Data Structures**: `inverted_index_t`, `bm25_scorer_t`
 - **Daily Code Goal**: Build inverted postings index tokenizing text columns and scoring relevance.
 
-#### 🔹 Day 12: Roaring Bitset Deletion Vectors
+---
+
+### Module D: Out-of-Core Processing & Execution Pipeline (Days 13–17)
+
+#### 🔹 Day 13: Roaring Bitset Deletion Vectors
 - **Data Structures**: `deletion_vector_t`
 - **Daily Code Goal**: Implement deletion bitmasks bypassing file rewrite compactions.
 
----
-
-### Module D: Out-of-Core Processing & Execution Pipeline (Days 13–16)
-
-#### 🔹 Day 13: External Merge Sort (Disk Spilling `ORDER BY`)
+#### 🔹 Day 14: External Merge Sort (Disk Spilling `ORDER BY`)
 - **Data Structures**: `external_sorter_t`
 - **Daily Code Goal**: Implement run generator spilling sorted runs to disk under memory limits.
 
-#### 🔹 Day 14: Partitioned Grace Hash Aggregation (Disk Spilling `GROUP BY`)
+#### 🔹 Day 15: Partitioned Grace Hash Aggregation (Disk Spilling `GROUP BY`)
 - **Data Structures**: `grace_hash_agg_t`
 - **Daily Code Goal**: Build disk-spilling hash aggregator handling high-cardinality `GROUP BY`.
 
-#### 🔹 Day 15: APL / K Vectorized Physical Execution Pipeline
+#### 🔹 Day 16: APL / K Vectorized Physical Execution Pipeline
 - **Data Structures**: `physical_operator_t`, `exec_pipeline_t`
 - **Daily Code Goal**: Assemble pipeline executing `scan` -> `filter` -> `gather` -> `aggregate`.
 
-#### 🔹 Day 16: Minimal SQL & K/q Query Parser & REPL CLI
+#### 🔹 Day 17: Minimal SQL & K/q Query Parser & REPL CLI
 - **Data Structures**: `sql_lexer_t`, `sql_parser_t`, `repl_t`
 - **Daily Code Goal**: Complete the working database engine REPL shell in C11 executing queries in sub-50ms!
 

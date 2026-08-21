@@ -1,6 +1,5 @@
-# Day 3: Zero-Copy Memory-Mapped Files (`mmap`) and OS Page Cache Integration
 
-Disk I/O is a significant cost in columnar storage engines. `simpledb` uses memory-mapped files (`mmap`) to bypass kernel-to-user buffer copies, exposing binary column files directly as typed slices.
+Disk I/O represents the primary performance bottleneck in columnar storage engines. In `simpledb`, memory-mapped files (`mmap`) eliminate kernel-to-user buffer copies, exposing binary column files directly as typed slices.
 
 ## 1. System Call Costs: Standard I/O vs. Memory Mapping
 

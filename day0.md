@@ -1,4 +1,3 @@
-# Day 0: Motivations, Technical Inspirations and Architectural Non-Goals
 
 Before writing the initial lines of C code for `simpledb`, it is essential to outline the core motivations for the project, its technical ancestry, and the explicit constraints of its design.
 

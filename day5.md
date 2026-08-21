@@ -1,4 +1,3 @@
-# Day 5: Column Vectors, Selection Vectors and Branchless Filtering
 
 In analytical query processing, filtering operations determine which rows satisfy specific predicates. In `simpledb`, query filters rely on selection vectors (`selection_vector_t`) and branchless comparison kernels to eliminate branch misprediction penalties and defer column copying until late materialization.
 
@@ -67,7 +66,7 @@ Row indices (`0` to `2.14 billion`) fit inside `int32_t`, so `selection_vector_t
 
 ## 3. Capacity Growth Before the Filter Loop
 
-The filter loop writes row indices unconditionally on every iteration. This means the output buffer must have enough pre-allocated capacity to hold the worst case, that is, every row in `src` matches the predicate.
+The filter loop writes row indices unconditionally on every iteration. This means the output buffer must have enough pre-allocated capacity to hold the worst case — that is, every row in `src` matches the predicate.
 
 `buffer_i32_ensure_capacity` doubles capacity in a loop until sufficient space exists:
 
@@ -93,7 +92,7 @@ void buffer_i32_ensure_capacity(buffer_i32_t *buf, size_t needed_capacity) {
 
 A single call before the loop (`buffer_i32_ensure_capacity(out_sel, out_sel->size + src.len)`) guarantees zero allocations inside the hot path. This is the same pre-allocation strategy used by ClickHouse and DuckDB for their selection vector filter kernels.
 
-Note that the guard frees `buf->data` unconditionally when it exists, regardless of whether `buf->size > 0`, to avoid a memory leak when a selection vector is cleared and reused.
+Note that the guard frees `sel->data` unconditionally when it exists — regardless of whether `sel->size > 0` — to avoid a memory leak when a selection vector is cleared and reused.
 
 ---
 
@@ -120,7 +119,7 @@ bool filter_gt_i32(slice_i32_t src, int32_t target, selection_vector_t *out_sel)
 }
 ```
 
-`bool match = (src.data[i] > target)` evaluates to integer `1` or `0`. The index `i` is written unconditionally into `out_sel->data[out_sel->size]`. Then `out_sel->size += match` advances the size pointer by 1 on a match, or by 0 on a miss. The next iteration overwrites the non-matching slot. The CPU executes every iteration at the same cost regardless of predicate selectivity.
+`bool match = (src.data[i] > target)` evaluates to integer `1` or `0`. The index `i` is written unconditionally into `out_sel->data[out_sel->size]`. Then `out_sel->size += match` advances the size pointer by 1 on a match, or by 0 on a miss — so the next iteration overwrites the non-matching slot. The CPU executes every iteration at the same cost regardless of predicate selectivity.
 
 ---
 
@@ -144,7 +143,7 @@ bool gather_i32(slice_i32_t src, const selection_vector_t *sel, buffer_i32_t *ou
 
 `sel->data[i]` contains a row index offset (e.g. `82`). `slice_i32_at(src, 82)` jumps directly to that position in the source column, reading only the matching row. Columns not referenced in the query projection are never touched.
 
-`buffer_i32_ensure_capacity(out_buf, sel->size)` pre-allocates exactly `sel->size` slots before the loop. `buffer_i32_push` then appends each gathered value, inheriting the same dynamic growth infrastructure as every other buffer in `simpledb`. No special-cased allocation logic is needed.
+`buffer_i32_ensure_capacity(out_buf, sel->size)` pre-allocates exactly `sel->size` slots before the loop. `buffer_i32_push` then appends each gathered value, inheriting the same dynamic growth infrastructure as every other buffer in `simpledb` — no special-cased allocation logic needed.
 
 ---
 
@@ -159,19 +158,17 @@ The efficiency of physical query filtering depends on how effectively an algorit
 | Branchless Selection Vector | 50% (Unpredictable Data) | ~5x - 8x | Out-of-Order Instruction Dispatch Limits |
 | SIMD Bitmask Vector Compression | 50% (Unpredictable Data) | ~15x - 20x+ | Bus Memory Bandwidth Saturation (~40-80 GB/s) |
 
-This SIMD bitmask vector compression technique relies on advanced hardware instructions, which will be implemented and evaluated in Day 8.
-
 ---
 
-## 7. How Selection Vectors Enable Long-Term Engine Architecture (Days 6-16)
+## 7. How Selection Vectors Enable Long-Term Engine Architecture (Days 6–16)
 
 Establishing `selection_vector_t` on Day 5 provides the foundational building block for advanced query execution across subsequent architectural phases.
 
-**Multi-Predicate Filter Chaining (Days 6-8)**: For multi-clause queries (`WHERE age > 30 AND department_id = 42 AND status = 1`), consecutive filter operators do not scan raw column arrays multiple times. The first filter generates a selection vector. Subsequent filters evaluate predicates directly over the indexed offsets, scanning only matching rows rather than the full column.
+**Multi-Predicate Filter Chaining (Days 6–8)**: For multi-clause queries (`WHERE age > 30 AND department_id = 42 AND status = 1`), consecutive filter operators do not scan raw column arrays multiple times. The first filter generates a selection vector. Subsequent filters evaluate predicates directly over the indexed offsets, scanning only matching rows rather than the full column.
 
-**ClickHouse-Style Granule Pruning and Primary Key Marks (Days 9-12)**: When scanning MergeTree storage parts, sparse primary index mark files isolate relevant 8,192-row granules. Selection vectors represent active matching row offsets within granules without allocating intermediate table memory.
+**ClickHouse-Style Granule Pruning and Primary Key Marks (Days 9–12)**: When scanning MergeTree storage parts, sparse primary index mark files isolate relevant 8,192-row granules. Selection vectors represent active matching row offsets within granules without allocating intermediate table memory.
 
-**Late Materialization in Projection, Hash Joins and Aggregations (Days 13-16)**: In queries referencing wide tables, the engine evaluates cheap numeric predicates first. Heavy string dictionary attributes and payload columns are gathered only for matching rows at the final query stage, reducing DRAM bandwidth consumption from hundreds of megabytes to a few kilobytes.
+**Late Materialization in Projection, Hash Joins and Aggregations (Days 13–16)**: In queries referencing wide tables, the engine evaluates cheap numeric predicates first. Heavy string dictionary attributes and payload columns are gathered only for matching rows at the final query stage, reducing DRAM bandwidth consumption from hundreds of megabytes to a few kilobytes.
 
 ---
 

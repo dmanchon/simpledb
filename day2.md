@@ -1,4 +1,3 @@
-# Day 2: Zero-Copy Typed Slices and C11 `_Generic` Polymorphism
 
 Building upon 64-byte aligned allocators, physical query execution operators require a mechanism to inspect column data without copying underlying memory or managing buffer lifecycles.
 
@@ -75,10 +74,10 @@ To support multiple column types (`int32_t`, `float`, `int64_t`) without type er
 #include "simpledb/allocator.h"
 
 typedef enum {
-    COL_TYPE_I32,
-    COL_TYPE_F32,
-    COL_TYPE_I64,
-    COL_TYPE_F64
+    TYPE_INT32,
+    TYPE_FLOAT,
+    TYPE_INT64,
+    TYPE_DOUBLE
 } column_type_t;
 
 typedef struct {

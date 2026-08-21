@@ -1,4 +1,3 @@
-# Day 4: Build System, Compiler Optimizations and POSIX Micro-Benchmarking
 
 Empirical throughput benchmarking is essential to evaluate columnar hardware scan performance. In `simpledb`, micro-benchmarking relies on POSIX monotonic timers and compiler memory barriers to measure memory scan bandwidth in gigabytes per second (GB/s).
 

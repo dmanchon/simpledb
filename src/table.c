@@ -4,11 +4,13 @@
 #include "simpledb/schema_registry.h"
 #include "simpledb/storage.h"
 #include "simpledb/string_dict.h"
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 table_t *table_create(const char *name) {
     table_t *table = malloc(sizeof(*table));
@@ -22,6 +24,9 @@ table_t *table_create(const char *name) {
     table->parts = NULL;
     table->schema = NULL;
     table->fts = NULL;
+    table->next_block_id = 1;
+
+    pthread_rwlock_init(&table->catalog_lock, NULL);
 
     return table;
 }
@@ -68,6 +73,7 @@ void table_destroy(table_t *table) {
         free(table->parts);
 
     schema_registry_free(table->schema);
+    pthread_rwlock_destroy(&table->catalog_lock);
 
     free(table);
 }
@@ -106,6 +112,7 @@ int table_insert_batch(table_t *table, const void ***columnar_values, size_t num
                                       col->keys_buf);
             break;
         }
+
         case COL_TYPE_STRING: {
             raw_string_column_t *col = (raw_string_column_t *)table->column_buffers[i];
             if (col->size + num_rows > col->capacity) {
@@ -143,11 +150,17 @@ int table_flush(table_t *table, const char *data_dir) {
         return 0; // Nothing to flush
     }
 
+    uint64_t block_id = table->next_block_id++;
+    char part_name[256];
+    table_part_format_name(part_name, sizeof(part_name), data_dir, block_id, block_id, 0);
+    mkdir(data_dir, 0777);
+    mkdir(part_name, 0777);
+
     for (size_t i = 0; i < table->schema->count; i++) {
         if (!table->column_buffers[i])
             continue;
 
-        column_writer_t *writer = column_writer_create(data_dir, table->schema->columns[i].name,
+        column_writer_t *writer = column_writer_create(part_name, table->schema->columns[i].name,
                                                        table->schema->columns[i].type);
         switch (table->schema->columns[i].type) {
         case COL_TYPE_I32:
@@ -158,11 +171,13 @@ int table_flush(table_t *table, const char *data_dir) {
             break;
         }
         case COL_TYPE_STRING_DICT: {
+            // first write the dict keys
             string_dict_column_t *col = (string_dict_column_t *)table->column_buffers[i];
             column_writer_append(writer, col->keys_buf->data, table->row_count);
             col->keys_buf->size = 0;
-            char dict_path[256];
-            snprintf(dict_path, sizeof(dict_path), "%s/%s.dict", data_dir,
+            // then write the original strings
+            char dict_path[512];
+            snprintf(dict_path, sizeof(dict_path), "%s/%s.dict", part_name,
                      table->schema->columns[i].name);
             FILE *dfp = fopen(dict_path, "wb");
             if (!dfp) {
@@ -173,6 +188,7 @@ int table_flush(table_t *table, const char *data_dir) {
             fclose(dfp);
             break;
         }
+
         case COL_TYPE_STRING: {
             raw_string_column_t *col = (raw_string_column_t *)table->column_buffers[i];
             column_writer_append(writer, col->strings, col->size);
@@ -185,33 +201,75 @@ int table_flush(table_t *table, const char *data_dir) {
         }
         column_writer_close(writer);
     }
-    table_part_t **new_parts = realloc(table->parts, sizeof(table_part_t *) * (table->num_parts + 1));
-    if (!new_parts) return -1;
+
+    pthread_rwlock_wrlock(&table->catalog_lock);
+
+    // Register the new immutable part in table->parts
+    table_part_t **new_parts =
+        realloc(table->parts, sizeof(table_part_t *) * (table->num_parts + 1));
+    if (!new_parts)
+        return -1;
     table->parts = new_parts;
     table_part_t *part = malloc(sizeof(table_part_t));
-    if (!part) return -1;
-    strncpy(part->part_path, data_dir, sizeof(part->part_path) - 1);
+    if (!part)
+        return -1;
+    strncpy(part->part_path, part_name, sizeof(part->part_path) - 1);
     part->part_path[sizeof(part->part_path) - 1] = '\0';
     part->row_count = table->row_count;
+    part->min_block = block_id;
+    part->max_block = block_id;
+    part->level = 0;
     table->parts[table->num_parts++] = part;
     table->row_count = 0;
+    atomic_init(&part->refcount, 0);
+
+    pthread_rwlock_unlock(&table->catalog_lock);
+
     return 0;
 }
-
 table_part_t **table_get_parts(table_t *table, size_t *out_num_parts) {
     if (!table) {
-        if (out_num_parts) *out_num_parts = 0;
+        if (out_num_parts)
+            *out_num_parts = 0;
         return NULL;
     }
-    if (out_num_parts) *out_num_parts = table->num_parts;
-    return table->parts;
+    pthread_rwlock_rdlock(&table->catalog_lock);
+
+    size_t num = table->num_parts;
+    if (out_num_parts)
+        *out_num_parts = num;
+
+    if (num == 0) {
+        pthread_rwlock_unlock(&table->catalog_lock);
+        return NULL;
+    }
+
+    table_part_t **tmp = malloc(sizeof(table_part_t *) * num);
+
+    for (size_t i = 0; i < num; i++) {
+        tmp[i] = table->parts[i];
+         atomic_fetch_add(&tmp[i]->refcount, 1);
+    }
+
+    pthread_rwlock_unlock(&table->catalog_lock);
+    return tmp;
+}
+
+void table_release_parts(table_part_t **parts, size_t num_parts) {
+    if (!parts) return;
+    for (size_t i = 0; i < num_parts; i++) {
+        atomic_fetch_sub(&parts[i]->refcount, 1);
+    }
+    free(parts);
 }
 
 void **table_get_active_buffer(table_t *table, size_t *out_row_count) {
     if (!table) {
-        if (out_row_count) *out_row_count = 0;
+        if (out_row_count)
+            *out_row_count = 0;
         return NULL;
     }
-    if (out_row_count) *out_row_count = table->row_count;
+    if (out_row_count)
+        *out_row_count = table->row_count;
     return table->column_buffers;
 }

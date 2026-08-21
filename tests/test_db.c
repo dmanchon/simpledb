@@ -17,6 +17,7 @@
 #include "simpledb/grace_hash_agg.h"
 #include "simpledb/table_scanner.h"
 #include "simpledb/exec_pipeline.h"
+#include "simpledb/part_merger.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -705,6 +706,7 @@ void test_table_e2e_batch_ingestion(void) {
 static void test_table_flush_e2e(void) {
     printf("Testing Table Flush E2E (Disk Serialization & Buffer Reset)...\n");
 
+    // 1. Create table & setup 4-column schema
     table_t *table = table_create("events_flush");
     assert(table != NULL);
 
@@ -726,6 +728,7 @@ static void test_table_flush_e2e(void) {
 
     table->column_buffers[3] = raw_string_column_create(4);
 
+    // 2. Ingest batch of 3 rows
     int32_t user_ids[] = { 201, 202, 203 };
     float scores[] = { 10.5f, 20.0f, 30.5f };
     const char *countries[] = { "US", "UK", "US" };
@@ -741,18 +744,22 @@ static void test_table_flush_e2e(void) {
     assert(rc_batch == 0);
     assert(table->row_count == 3);
 
+    // 3. Flush in-memory data to disk
     int rc_flush2 = table_flush(table, ".");
     assert(rc_flush2 == 0);
 
+    // 4. Assert in-memory buffer was reset
     assert(table->row_count == 0);
     buffer_i32_t *c0 = (buffer_i32_t *)table->column_buffers[0];
     assert(c0->size == 0);
-    assert(c0->capacity >= 4);
+    assert(c0->capacity >= 4); // Capacity retained!
     (void)c0;
 
+    // 5. Assert part catalog registered the new immutable part
     assert(table->num_parts == 1);
     assert(table->parts[0]->row_count == 3);
 
+    // 6. Test Read-Path Metadata APIs
     size_t active_rows = 999;
     void **active_bufs = table_get_active_buffer(table, &active_rows);
     assert(active_bufs != NULL && active_rows == 0);
@@ -764,24 +771,31 @@ static void test_table_flush_e2e(void) {
     assert(parts[0]->row_count == 3);
     (void)parts;
 
-    FILE *f_user_id = fopen("./user_id.bin", "rb");
+    // 7. Verify serialized files exist on disk inside the part directory
+    FILE *f_user_id = fopen("./all_1_1_0/user_id.bin", "rb");
     assert(f_user_id != NULL);
     fclose(f_user_id);
 
-    FILE *f_country_dict = fopen("./country.dict", "rb");
+    FILE *f_country_dict = fopen("./all_1_1_0/country.dict", "rb");
     assert(f_country_dict != NULL);
     fclose(f_country_dict);
 
-    FILE *f_comment_strings = fopen("./comment.strings", "rb");
+    FILE *f_comment_strings = fopen("./all_1_1_0/comment.strings", "rb");
     assert(f_comment_strings != NULL);
     fclose(f_comment_strings);
 
-    remove("./user_id.bin");
-    remove("./score.bin");
-    remove("./country.bin");
-    remove("./country.dict");
-    remove("./comment.bin");
-    remove("./comment.strings");
+    // Cleanup generated disk files
+    remove("./all_1_1_0/user_id.bin");
+    remove("./all_1_1_0/user_id.idx");
+    remove("./all_1_1_0/score.bin");
+    remove("./all_1_1_0/score.idx");
+    remove("./all_1_1_0/country.bin");
+    remove("./all_1_1_0/country.idx");
+    remove("./all_1_1_0/country.dict");
+    remove("./all_1_1_0/comment.bin");
+    remove("./all_1_1_0/comment.idx");
+    remove("./all_1_1_0/comment.strings");
+    remove("./all_1_1_0");
 
     table_destroy(table);
     printf("Table Flush E2E tests passed!\n");
@@ -1079,6 +1093,79 @@ int test_exec_pipeline(void) {
     return 0;
 }
 
+void test_part_merger(void) {
+    // 1. Setup a Table
+    schema_registry_t* schema = schema_registry_create();
+    schema_registry_add_column(schema, "user_id", COL_TYPE_I32);
+    schema_registry_add_column(schema, "amount", COL_TYPE_I32);
+    
+    table_t* table = table_create("events_merge_test");
+    table->schema = schema;
+    table->column_buffers = malloc(sizeof(void*) * 2);
+    table->column_buffers[0] = buffer_i32_create(4);
+    table->column_buffers[1] = buffer_i32_create(4);
+    
+    // 2. Insert Data and Flush to create Part 1 (simulate batch 1)
+    int32_t users1[] = {1, 2};
+    int32_t amounts1[] = {100, 200};
+    const void *batch1[2];
+    batch1[0] = users1;
+    batch1[1] = amounts1;
+    
+    int rc_batch1 = table_insert_batch(table, (const void ***)batch1, 2, 2);
+    assert(rc_batch1 == 0);
+    int rc_flush1 = table_flush(table, ".");
+    assert(rc_flush1 == 0); // Creates part 0
+    
+    // 3. Insert Data and Flush to create Part 2 (simulate batch 2)
+    int32_t users2[] = {3, 4};
+    int32_t amounts2[] = {300, 400};
+    const void *batch2[2];
+    batch2[0] = users2;
+    batch2[1] = amounts2;
+    
+    int rc_batch2 = table_insert_batch(table, (const void ***)batch2, 2, 2);
+    assert(rc_batch2 == 0);
+    int rc_flush2 = table_flush(table, ".");
+    assert(rc_flush2 == 0); // Creates part 1
+    
+    // Assume part 0 and part 1 are now immutable parts on disk.
+    // Let's verify we have exactly 2 parts.
+    assert(table->num_parts == 2);
+    
+    // 4. Run the Compactor
+    merge_config_t config = {
+        .max_parts_to_merge = 10,
+        .min_rows_to_merge = 1,
+        .force_merge_all = true // Force compaction of all existing parts
+    };
+    
+    part_merger_t* merger = part_merger_create(table, config);
+    if (merger->num_parts > 0) {
+        part_merger_execute(merger);
+    }
+    part_merger_destroy(merger);
+    
+    // 5. Verify the Table State
+    // The table should now only have 1 active, consolidated part!
+    assert(table->num_parts == 1);
+    
+    // 6. Cleanup
+    table_destroy(table);
+    remove("./all_1_1_0/user_id.bin");
+    remove("./all_1_1_0/amount.bin");
+    remove("./all_1_1_0");
+    remove("./all_2_2_0/user_id.bin");
+    remove("./all_2_2_0/amount.bin");
+    remove("./all_2_2_0");
+    remove("events_merge_test/all_1_2_1/user_id.bin");
+    remove("events_merge_test/all_1_2_1/amount.bin");
+    remove("events_merge_test/all_1_2_1");
+    remove("events_merge_test");
+    
+    printf("Day 19 MergeTree Part Compactor test passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -1109,6 +1196,7 @@ int main(void) {
     test_grace_hash_agg();
     test_table_scanner();
     test_exec_pipeline();
+    test_part_merger();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

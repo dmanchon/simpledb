@@ -18,6 +18,7 @@
 #include "simpledb/table_scanner.h"
 #include "simpledb/exec_pipeline.h"
 #include "simpledb/part_merger.h"
+#include "simpledb/sql_parser.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -1166,6 +1167,84 @@ void test_part_merger(void) {
     printf("Day 19 MergeTree Part Compactor test passed!\n");
 }
 
+static void test_sql_parser(void) {
+    // 1. Test SELECT with projection, aggregate, alias, WHERE, GROUP BY, and ORDER BY DESC
+    {
+        const char* query = "SELECT user_id, sum(amount) AS total FROM events WHERE amount > 100 GROUP BY user_id ORDER BY total DESC;";
+        sql_parser_t parser = sql_parser_create(query);
+        ast_query_t ast = {0};
+
+        bool ok = sql_parser_parse(&parser, &ast);
+        assert(ok);
+        (void)ok;
+        assert(ast.stmt_type == STMT_SELECT);
+
+        assert(strcmp(ast.table_name, "events") == 0);
+        assert(ast.num_select_exprs == 2);
+        assert(ast.select_exprs[0].type == AST_PROJECTION);
+        assert(strcmp(ast.select_exprs[0].column_name, "user_id") == 0);
+
+        assert(ast.select_exprs[1].type == AST_AGG_SUM);
+        assert(strcmp(ast.select_exprs[1].column_name, "amount") == 0);
+        assert(strcmp(ast.select_exprs[1].alias, "total") == 0);
+
+        assert(ast.num_predicates == 1);
+        assert(strcmp(ast.predicates[0].column_name, "amount") == 0);
+        assert(ast.predicates[0].op == OP_GREATER_THAN);
+        assert(ast.predicates[0].int_val == 100);
+
+        assert(ast.has_group_by);
+        assert(strcmp(ast.group_by_col, "user_id") == 0);
+
+        assert(ast.has_order_by);
+        assert(strcmp(ast.order_by_col, "total") == 0);
+        assert(ast.order_desc == true);
+    }
+
+    // 2. Test Single-Row INSERT ... VALUES
+    {
+        const char* query = "INSERT INTO events (user_id, status) VALUES (42, 'SUCCESS');";
+        sql_parser_t parser = sql_parser_create(query);
+        ast_query_t ast = {0};
+
+        bool ok = sql_parser_parse(&parser, &ast);
+        assert(ok);
+        (void)ok;
+        assert(ast.stmt_type == STMT_INSERT);
+
+        assert(strcmp(ast.table_name, "events") == 0);
+
+        assert(ast.num_insert_cols == 2);
+        assert(strcmp(ast.insert_cols[0], "user_id") == 0);
+        assert(strcmp(ast.insert_cols[1], "status") == 0);
+
+        assert(ast.num_insert_vals == 2);
+        assert(ast.insert_vals[0].is_string == false);
+        assert(ast.insert_vals[0].int_val == 42);
+
+        assert(ast.insert_vals[1].is_string == true);
+        assert(strcmp(ast.insert_vals[1].string_val, "SUCCESS") == 0);
+    }
+
+    // 3. Test Bulk JSON INSERT ... FROM
+    {
+        const char* query = "INSERT INTO events FROM 'events_data.json';";
+        sql_parser_t parser = sql_parser_create(query);
+        ast_query_t ast = {0};
+
+        bool ok = sql_parser_parse(&parser, &ast);
+        assert(ok);
+        (void)ok;
+        assert(ast.stmt_type == STMT_INSERT);
+
+        assert(strcmp(ast.table_name, "events") == 0);
+        assert(ast.is_bulk_insert == true);
+        assert(strcmp(ast.from_file_path, "events_data.json") == 0);
+    }
+
+    printf("Day 20 SQL Parser tests passed (SELECT, INSERT, & Bulk JSON)!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -1197,6 +1276,7 @@ int main(void) {
     test_table_scanner();
     test_exec_pipeline();
     test_part_merger();
+    test_sql_parser();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

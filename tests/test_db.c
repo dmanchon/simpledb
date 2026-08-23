@@ -19,6 +19,7 @@
 #include "simpledb/exec_pipeline.h"
 #include "simpledb/part_merger.h"
 #include "simpledb/sql_parser.h"
+#include "simpledb/repl.h"
 #include <time.h>
 #undef NDEBUG
 #include <assert.h>
@@ -1245,6 +1246,78 @@ static void test_sql_parser(void) {
     printf("Day 20 SQL Parser tests passed (SELECT, INSERT, & Bulk JSON)!\n");
 }
 
+static void test_repl_write_path_execution(void) {
+    table_t *table = table_create("events_merge_test");
+
+    {
+	// simple test:
+        const char *query = "INSERT INTO events (user_id, status) VALUES (42, 'SUCCESS');";
+        sql_parser_t parser = sql_parser_create(query);
+        ast_query_t ast = {0};
+        assert(sql_parser_parse(&parser, &ast));
+        repl_exec_insert(table, &ast);
+        assert(table->row_count == 1);
+        assert(table->schema != NULL);
+        assert(table->schema->count == 2);
+        // Verify physical columnar vectors in memory
+        buffer_i32_t *id_buf = (buffer_i32_t *)table->column_buffers[0];
+        assert(id_buf->data[0] == 42);
+        raw_string_column_t *str_buf = (raw_string_column_t *)table->column_buffers[1];
+        assert(strcmp(str_buf->strings[0], "SUCCESS") == 0);
+    }
+    {
+	// schema evolution:
+        const char *query = "INSERT INTO events (user_id, status, amount) VALUES (42, 'SUCCESS', 3.2);";
+        sql_parser_t parser = sql_parser_create(query);
+        ast_query_t ast = {0};
+        assert(sql_parser_parse(&parser, &ast));
+        repl_exec_insert(table, &ast);
+        assert(table->row_count == 2);
+        assert(table->schema != NULL);
+        assert(table->schema->count == 3);
+        // Verify physical columnar vectors in memory
+        buffer_i32_t *id_buf = (buffer_i32_t *)table->column_buffers[0];
+        assert(id_buf->data[0] == 42);
+        raw_string_column_t *str_buf = (raw_string_column_t *)table->column_buffers[1];
+        assert(strcmp(str_buf->strings[0], "SUCCESS") == 0);
+    }
+    table_destroy(table);
+    table = table_create("events_merge_test");
+    {
+	char tmp_path[] = "/tmp/cdb_bulk_XXXXXX";
+        int fd = mkstemp(tmp_path);
+        assert(fd != -1);
+        FILE *f = fdopen(fd, "w");
+        assert(f != NULL);
+        fprintf(f, "{\"user_id\": 101, \"status\": \"PENDING\"}\n");
+        fprintf(
+            f,
+            "{\"user_id\": 102, \"status\": \"SUCCESS\", \"amount\": 250, \"region\": \"EU\"}\n");
+
+        for (int i = 0; i < 15000; i++) {
+            fprintf(f, "{\"user_id\": %d, \"amount\": 99, \"region\": \"EU\"}\n", i + 103);
+        }
+        fclose(f); // Closes both FILE* and the underlying fd
+        char query[256];
+        snprintf(query, sizeof(query), "INSERT INTO events FROM '%s';", tmp_path);
+	
+        sql_parser_t parser = sql_parser_create(query);
+        ast_query_t ast = {0};
+        assert(sql_parser_parse(&parser, &ast));
+        repl_exec_insert(table, &ast);
+	assert(table->row_count == 15002);
+        assert(table->schema != NULL);
+        assert(table->schema->count == 4);
+	// Verify physical columnar vectors in memory
+        buffer_i32_t *id_buf = (buffer_i32_t *)table->column_buffers[0];
+        assert(id_buf->data[0] == 101);
+        raw_string_column_t *str_buf = (raw_string_column_t *)table->column_buffers[1];
+        assert(strcmp(str_buf->strings[0], "PENDING") == 0);
+    }
+
+    printf("Day 21 repl execution write-path runtime passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -1277,6 +1350,7 @@ int main(void) {
     test_exec_pipeline();
     test_part_merger();
     test_sql_parser();
+    test_repl_write_path_execution();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

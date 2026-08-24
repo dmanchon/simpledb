@@ -1318,6 +1318,152 @@ static void test_repl_write_path_execution(void) {
     printf("Day 21 repl execution write-path runtime passed!\n");
 }
 
+static void test_repl_read_path_execution(void) {
+    table_t *table = table_create("events_merge_test");
+
+    {
+	// simple test add data:
+	char tmp_path[] = "/tmp/cdb_bulk_XXXXXX";
+        int fd = mkstemp(tmp_path);
+        assert(fd != -1);
+        FILE *f = fdopen(fd, "w");
+        assert(f != NULL);
+
+        for (int i = 0; i < 15000; i++) {
+            fprintf(f, "{\"user_id\": %d, \"amount\": %d, \"region\": \"EU\"}\n", i, i % 5);
+        }
+        fclose(f); // Closes both FILE* and the underlying fd
+        char query[256];
+        snprintf(query, sizeof(query), "INSERT INTO events FROM '%s';", tmp_path);
+	
+        sql_parser_t parser = sql_parser_create(query);
+        ast_query_t ast = {0};
+        assert(sql_parser_parse(&parser, &ast));
+        repl_exec_insert(table, &ast);
+	assert(table->row_count == 15000);
+        assert(table->schema != NULL);
+        assert(table->schema->count == 3);
+	// Verify physical columnar vectors in memory
+        buffer_i32_t *id_buf = (buffer_i32_t *)table->column_buffers[0];
+        assert(id_buf->data[0] == 0);
+
+	const char select_query[256] = "SELECT user_id, SUM(amount) FROM events WHERE amount < 100 GROUP BY user_id;";
+        parser = sql_parser_create(select_query);
+	assert(sql_parser_parse(&parser, &ast));
+        physical_operator_t *pipeline = repl_exec_select(table, &ast);
+        assert(pipeline != NULL);
+
+        size_t total_rows = 0;
+        size_t num_blocks = 0;
+        while (true) {
+            block_t block = exec_pipeline_run(pipeline);
+            if (block.num_rows == 0)
+                break;
+            total_rows += block.num_rows;
+            num_blocks++;
+        }
+        assert(num_blocks == 2); // Page 1: 8192 groups, Page 2: 6808 groups
+        assert(total_rows == 15000);
+        physical_operator_destroy(pipeline);
+        remove(tmp_path);
+    }
+
+    // 2. Multi-page unaggregated SELECT + WHERE across Flushed Disk Granules + Active RAM Buffer (3 blocks)
+    {
+        // Flush the 15,000 in-memory rows to disk part ./all_1_1_0 (2 granules: 8192 + 6808 rows)
+        assert(table_flush(table, ".") == 0);
+        assert(table->num_parts == 1);
+        assert(table->row_count == 0);
+
+        // Insert 5,000 additional rows into active RAM buffer (user_id: 15000..19999)
+        char tmp_path2[] = "/tmp/cdb_bulk2_XXXXXX";
+        int fd2 = mkstemp(tmp_path2);
+        assert(fd2 != -1);
+        FILE *f2 = fdopen(fd2, "w");
+        assert(f2 != NULL);
+        for (int i = 15000; i < 20000; i++) {
+            fprintf(f2, "{\"user_id\": %d, \"amount\": %d, \"region\": \"EU\"}\n", i, i % 5);
+        }
+        fclose(f2);
+
+        char insert_q2[256];
+        snprintf(insert_q2, sizeof(insert_q2), "INSERT INTO events FROM '%s';", tmp_path2);
+        sql_parser_t parser = sql_parser_create(insert_q2);
+        ast_query_t ast = {0};
+        assert(sql_parser_parse(&parser, &ast));
+        repl_exec_insert(table, &ast);
+        assert(table->row_count == 5000);
+        remove(tmp_path2);
+
+        // Query without GROUP BY: streams 2 disk granule blocks (8192 + 6808) + 1 RAM block (5000) = 3 blocks
+        const char *scan_filter_q = "SELECT user_id, amount FROM events WHERE amount < 100;";
+        parser = sql_parser_create(scan_filter_q);
+        assert(sql_parser_parse(&parser, &ast));
+        physical_operator_t *pipeline = repl_exec_select(table, &ast);
+        assert(pipeline != NULL);
+
+        size_t total_rows = 0;
+        size_t num_blocks = 0;
+        while (true) {
+            block_t block = exec_pipeline_run(pipeline);
+            if (block.num_rows == 0)
+                break;
+            total_rows += block.num_rows;
+            num_blocks++;
+        }
+        assert(num_blocks == 3); // Block 1: 8192 (disk), Block 2: 6808 (disk), Block 3: 5000 (RAM)
+        assert(total_rows == 20000);
+        physical_operator_destroy(pipeline);
+    }
+
+    // 3. Multi-page selective WHERE (amount > 0) + GROUP BY across Disk + RAM (2 blocks, 16,000 groups)
+    {
+        const char *agg_filter_q =
+            "SELECT user_id, SUM(amount) FROM events WHERE amount > 0 GROUP BY user_id;";
+        sql_parser_t parser = sql_parser_create(agg_filter_q);
+        ast_query_t ast = {0};
+        assert(sql_parser_parse(&parser, &ast));
+        physical_operator_t *pipeline = repl_exec_select(table, &ast);
+        assert(pipeline != NULL);
+
+        size_t total_rows = 0;
+        size_t num_blocks = 0;
+        while (true) {
+            block_t block = exec_pipeline_run(pipeline);
+            if (block.num_rows == 0)
+                break;
+            for (size_t r = 0; r < block.num_rows; r++) {
+                int32_t uid = block.columns[0].data[r];
+                int32_t sum = block.columns[1].data[r];
+                assert(sum > 0);
+                assert(sum == (uid % 5));
+            }
+            total_rows += block.num_rows;
+            num_blocks++;
+        }
+        // Out of 20,000 rows, 4/5 have amount > 0 -> 16,000 groups across 2 blocks (8192 + 7808)
+        assert(num_blocks == 2);
+        assert(total_rows == 16000);
+        physical_operator_destroy(pipeline);
+
+        remove("./all_1_1_0/user_id.bin");
+        remove("./all_1_1_0/user_id.mrk");
+        remove("./all_1_1_0/user_id.idx");
+        remove("./all_1_1_0/amount.bin");
+        remove("./all_1_1_0/amount.mrk");
+        remove("./all_1_1_0/amount.idx");
+        remove("./all_1_1_0/region.bin");
+        remove("./all_1_1_0/region.mrk");
+        remove("./all_1_1_0/region.idx");
+        remove("./all_1_1_0/region.strings");
+        remove("./all_1_1_0/region.offsets");
+        remove("./all_1_1_0");
+    }
+
+    table_destroy(table);
+    printf("Day 22 repl execution read-path runtime passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -1351,6 +1497,7 @@ int main(void) {
     test_part_merger();
     test_sql_parser();
     test_repl_write_path_execution();
+    test_repl_read_path_execution();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

@@ -5,7 +5,7 @@
 
 #define MAX_COLUMN_NAME_LEN 64
 
-typedef enum { COL_TYPE_I32, COL_TYPE_F32, COL_TYPE_STRING_DICT } column_type_t;
+typedef enum { COL_TYPE_I32, COL_TYPE_F32, COL_TYPE_STRING_DICT, COL_TYPE_STRING } column_type_t;
 
 typedef struct {
     char name[MAX_COLUMN_NAME_LEN];

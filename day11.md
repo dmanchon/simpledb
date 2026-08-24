@@ -73,15 +73,37 @@ Here is how you will implement this in `src/storage.c`:
 4. Store the `mask` pointer. (The reader doesn't own the mask, it just borrows it from the index!)
 
 ### `column_reader_next_granule_i32`
-This is the heart of the engine. It is a `while` loop that advances `current_granule_idx` until it finds a Granule where the bit in the `mask` is `1`.
-1. Check if `current_granule_idx >= total_granules`. If so, return an empty slice (len = 0).
-2. If `mask` is provided, check `bitmap_is_set(mask, current_granule_idx)`. 
-   - If it's `0`, skip it! Increment `idx` and `continue`.
-3. If it's `1` (or if `mask` is NULL for a full table scan), we've found our chunk!
-4. **The Zero-Copy mechanism:** Calculate the memory pointer: `const int32_t* ptr = ((const int32_t*)mmap->data) + (current_granule_idx * 8192);`
-5. Calculate the remaining rows (it will be 8192, unless it's the very last granule in the file which might be partially full).
-6. Increment `current_granule_idx`.
-7. Return `slice_of(ptr, rows)`.
+This is the heart of the engine. It is a pull-based iterator that aggressively skips masked Granules using the L1 cache, avoiding disk I/O, and yielding exactly one chunk at a time.
+
+```c
+slice_i32_t column_reader_next_granule_i32(column_reader_t *reader) {
+    // 1. Skip over any masked-out granules using the bitmap
+    while (reader->current_granule_idx < reader->total_granules && 
+           reader->mask && 
+           !bitmap_is_set(reader->mask, reader->current_granule_idx)) {
+        reader->current_granule_idx++;
+    }
+
+    // 2. Check for End Of File (EOF)
+    if (reader->current_granule_idx >= reader->total_granules) {
+        return slice_i32_create(NULL, 0);
+    }
+
+    // 3. Get the Zero-Copy pointer directly into the mmap
+    const int32_t *ptr = (const int32_t *)reader->mmap->data + (reader->current_granule_idx * GRANULE_SIZE);
+    
+    // 4. Calculate rows to yield (GRANULE_SIZE, unless it's the final partial Granule)
+    size_t rows = GRANULE_SIZE;
+    if (reader->current_granule_idx == reader->total_granules - 1) {
+        size_t total_rows_in_file = reader->mmap->size / sizeof(int32_t);
+        rows = total_rows_in_file - (reader->current_granule_idx * GRANULE_SIZE);
+    }
+
+    // 5. Advance the iterator for the next call
+    reader->current_granule_idx++;
+    return slice_i32_create(ptr, rows);
+}
+```
 
 ## 6. Testing the Reader
 

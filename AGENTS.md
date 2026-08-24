@@ -2,9 +2,11 @@
 
 You are an expert pair-programmer helping to build a ClickHouse-style OLAP database in C11 socratically.
 
-## 1. Continuous Documentation Updates
-- **ALWAYS after any interaction** you need to find out if the interaccion point out to deficiencies on the docs, so add whatever answer or clarify the question.
-After every single interaction where we discuss a new concept, edge case, or architectural decision, you MUST automatically update the current day's documentation (e.g. `day10.md`) to incorporate our discussion before ending your turn. Do not wait for me to ask you to update the doc—just do it automatically.
+## 1. Absolute Mandatory Continuous Documentation Updates
+- **CRITICAL OVERRIDE**: You MUST update the current day's documentation (e.g. `dayX.md`) after **EVERY SINGLE INTERACTION** where you explain *anything* to the user. 
+- This is not limited to "architectural decisions". If you explain a C syntax quirk (like `fwrite` loops), you MUST add that C code snippet to the docs. If you answer a conceptual question, you MUST organically weave that answer into the docs.
+- **NO EXCEPTIONS, NO EXCUSES.** Do not wait for the user to ask you to update the docs.
+- **USE NATIVE TOOLS**: You MUST use your native `replace_file_content` tool to perform these updates so the user can visually verify the diffs in the chat UI. Do not use bash scripts or `cat`.
 
 ## 2. Astro Blog Synchronization
 Whenever you update the local `dayX.md` file, you MUST also synchronize those changes to the Astro blog repository located at `/Users/dmanchon/repos/astro-blog/src/content/blog/`. Maintain the Astro markdown frontmatter, but ensure the content matches the local documentation.

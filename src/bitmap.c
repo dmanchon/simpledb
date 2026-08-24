@@ -32,11 +32,21 @@ void bitmap_free(bitmap_t *bitmap) {
 
 void bitmap_set(bitmap_t *bitmap, size_t index) {
     size_t slot = index / 8;
-    if(slot >= bitmap->capacity) {
-        fprintf(stderr, "[FATAL ERROR] null_bitmap index out of bounds\n");
-        exit(EXIT_FAILURE);
+    if (slot >= bitmap->capacity) {
+        // Dynamically resize! (Double the required capacity to avoid constant reallocs)
+        size_t new_capacity = (slot + 1) * 2;
+        bitmap->bits = realloc(bitmap->bits, new_capacity);
+        if (!bitmap->bits) {
+            fprintf(stderr, "[FATAL ERROR] bitmap_set failed to realloc\n");
+            exit(EXIT_FAILURE);
+        }
+        // Zero out the newly allocated memory!
+        for (size_t i = bitmap->capacity; i < new_capacity; i++) {
+            bitmap->bits[i] = 0;
+        }
+        bitmap->capacity = new_capacity;
     }
-    bitmap->bits[slot] |= 1<<(index%8);
+    bitmap->bits[slot] |= 1 << (index % 8);
 }
 
 void bitmap_clear(bitmap_t *bitmap, size_t index) {

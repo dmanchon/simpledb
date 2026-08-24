@@ -27,6 +27,7 @@ typedef struct {
     column_type_t type;
 
     FILE* bin_fp;            // Open file pointer for writing the raw data
+    FILE* strings_fp;        // Open file pointer for the flat text data (COL_TYPE_STRING)
 
     uint64_t rows_written;   // Running total of rows written
 
@@ -57,6 +58,7 @@ void column_writer_attach_index(column_writer_t* writer, struct index_writer_t* 
 
 typedef struct {
     mmap_file_t* mmap;          // The memory-mapped .bin file
+    mmap_file_t* strings_mmap;  // The memory-mapped .strings file (COL_TYPE_STRING)
     column_type_t type;         // I32, F32, etc.
     const bitmap_t* mask;       // The mask from the Sparse Index!
     size_t total_granules;      // Total granules in the file

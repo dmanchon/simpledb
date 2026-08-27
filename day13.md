@@ -263,6 +263,19 @@ function add(row_id):
 - **`deletion_vector_get_simd_mask`**: This is the **Execution Engine Bridge**. Our SIMD `gather` and `filter` operations process data in 64-row batches (a 64-bit mask). This method looks at a `start_row` (which the engine guarantees is a multiple of 64), extracts exactly 64 bits worth of deletion statuses, and outputs a single `uint64_t`. 
   - *Example*: If `start_row = 64`, the function checks rows 64 through 127. If row 65 and row 67 are deleted, it returns a 64-bit integer where the 1st and 3rd bits are set to `1` (binary: `...00001010`).
   - *Optimization*: Because `start_row` is aligned to a 64-row boundary, all 64 rows are mathematically guaranteed to live in the exact same container! You only need to route to the container once. Furthermore, if it is a `CONTAINER_BITMAP`, you can return the `uint64_t` directly from the bitmap array (`bitmap[low_key / 64]`) in a single $O(1)$ memory read. No loops required!
+  - If it falls back to a `CONTAINER_ARRAY`, avoid looping 64 times and re-searching the array. Instead, iterate directly over the sparse array's `cardinality` to quickly extract the matching bits:
+    ```c
+    uint64_t out_mask = 0;
+    uint16_t *array = (uint16_t *)container->data;
+    for (size_t i = 0; i < container->cardinality; i++) {
+        if (array[i] >= low_key && array[i] < low_key + 64) {
+            out_mask |= (1ULL << (array[i] - low_key)); // Set relative bit
+        } else if (array[i] >= low_key + 64) {
+            break; // Array is sorted, we can safely abort!
+        }
+    }
+    return out_mask;
+    ```
   - The execution engine uses `_mm512_kandn` to perform a bitwise `AND NOT` with this mask, instantly ignoring all deleted rows in a single hardware cycle without a single branch.
 
 ### 5. Unit Tests

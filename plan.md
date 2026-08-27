@@ -136,25 +136,29 @@
 
 ---
 
-### Module D: Out-of-Core Processing & Execution Pipeline (Days 13–17)
+### Module D: Out-of-Core Processing & Execution Pipeline (Days 13–18)
 
 #### 🔹 Day 13: Roaring Bitset Deletion Vectors
 - **Data Structures**: `deletion_vector_t`
 - **Daily Code Goal**: Implement deletion bitmasks bypassing file rewrite compactions.
 
-#### 🔹 Day 14: External Merge Sort (Disk Spilling `ORDER BY`)
+#### 🔹 Day 14: The Table Abstraction (Ingestion Layer)
+- **Data Structures**: `table_t`
+- **Daily Code Goal**: Build the coordinating ingestion layer to multiplex rows into columnar files and update indexes simultaneously.
+
+#### 🔹 Day 15: External Merge Sort (Disk Spilling `ORDER BY`)
 - **Data Structures**: `external_sorter_t`
 - **Daily Code Goal**: Implement run generator spilling sorted runs to disk under memory limits.
 
-#### 🔹 Day 15: Partitioned Grace Hash Aggregation (Disk Spilling `GROUP BY`)
+#### 🔹 Day 16: Partitioned Grace Hash Aggregation (Disk Spilling `GROUP BY`)
 - **Data Structures**: `grace_hash_agg_t`
 - **Daily Code Goal**: Build disk-spilling hash aggregator handling high-cardinality `GROUP BY`.
 
-#### 🔹 Day 16: APL / K Vectorized Physical Execution Pipeline
+#### 🔹 Day 17: APL / K Vectorized Physical Execution Pipeline
 - **Data Structures**: `physical_operator_t`, `exec_pipeline_t`
 - **Daily Code Goal**: Assemble pipeline executing `scan` -> `filter` -> `gather` -> `aggregate`.
 
-#### 🔹 Day 17: Minimal SQL & K/q Query Parser & REPL CLI
+#### 🔹 Day 18: Minimal SQL & K/q Query Parser & REPL CLI
 - **Data Structures**: `sql_lexer_t`, `sql_parser_t`, `repl_t`
 - **Daily Code Goal**: Complete the working database engine REPL shell in C11 executing queries in sub-50ms!
 

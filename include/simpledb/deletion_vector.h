@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define INITIAL_CAPACITY 16
+#define DV_INITIAL_CAPACITY 16
 
 // Roaring Container Types
 typedef enum {

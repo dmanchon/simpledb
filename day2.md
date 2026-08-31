@@ -3,7 +3,7 @@ Building upon 64-byte aligned allocators, physical query execution operators req
 
 ## 1. Memory Ownership in Query Execution
 
-In object-oriented architectures, data movement between execution operators frequently involves vector allocation or copy construction. In an analytical engine scanning 100 million rows, copying column vectors introduces tens of milliseconds of latency and wastes hundreds of megabytes of memory bandwidth.
+In object-oriented architectures, data movement between execution operators frequently involves vector allocation or copy construction. In an analytical engine scanning 100 million rows, copying column vectors introduces latency and consumes memory bandwidth.
 
 Physical query operators (such as SIMD filters, scans, and hash aggregations) read data sequentially without needing to modify or take ownership of the input columns.
 

@@ -12,8 +12,11 @@ def update_file(filepath, new_body):
     else:
         frontmatter = ''
         
+    # Strip out the top-level H1 header (e.g., # Day 14: ...) to avoid double titles
+    new_body_stripped = re.sub(r'^#\s+[^\n]*\n+', '', new_body.lstrip(), count=1)
+        
     with open(filepath, 'w') as f:
-        f.write(frontmatter + '\n' + new_body.strip() + '\n')
+        f.write(frontmatter + '\n' + new_body_stripped.strip() + '\n')
 
 def read_local(filepath):
     with open(filepath, 'r') as f:
@@ -108,11 +111,21 @@ write_local('/Users/dmanchon/repos/cdb/day1.md', day1_body)
 write_local('/Users/dmanchon/repos/cdb/day2.md', day2_body)
 write_local('/Users/dmanchon/repos/cdb/day3.md', day3_body)
 
+# Day 13
+day13_body = read_local('/Users/dmanchon/repos/cdb/day13.md')
+write_local('/Users/dmanchon/repos/cdb/day13.md', day13_body)
+
+# Day 14
+day14_body = read_local('/Users/dmanchon/repos/cdb/day14.md')
+write_local('/Users/dmanchon/repos/cdb/day14.md', day14_body)
+
 # Update Astro files
 astro_dir = '/Users/dmanchon/repos/astro-blog/src/content/blog'
 update_file(f'{astro_dir}/day0-motivations-and-influences.md', day0_body)
 update_file(f'{astro_dir}/day1-64byte-simd-alignment.md', day1_body)
 update_file(f'{astro_dir}/day2-zero-copy-typed-slices.md', day2_body)
 update_file(f'{astro_dir}/day3-zero-copy-mmap-files.md', day3_body)
+update_file(f'{astro_dir}/day13-deletion-vectors.md', day13_body)
+update_file(f'{astro_dir}/day14.md', day14_body)
 
 print("Done")

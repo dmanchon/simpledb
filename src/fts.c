@@ -11,10 +11,10 @@
 inverted_index_t *inverted_index_create(void) {
     inverted_index_t *index = malloc(sizeof(inverted_index_t));
 
-    index->capacity = INITIAL_CAPACITY;
+    index->capacity = FTS_INITIAL_CAPACITY;
     index->map = string_dict_create();
     index->num_terms = 0;
-    index->postings = calloc(sizeof(*(index->postings)), INITIAL_CAPACITY);
+    index->postings = calloc(sizeof(*(index->postings)), FTS_INITIAL_CAPACITY);
 
     return index;
 }

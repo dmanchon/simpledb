@@ -7,7 +7,7 @@
 #include "simpledb/bitmap.h"
 #include "simpledb/string_dict.h"
 
-#define INITIAL_CAPACITY 25000
+#define FTS_INITIAL_CAPACITY 25000
 
 typedef struct {
     bitmap_t** postings;   // Array of pointers to bitmaps (1 bitmap per term)

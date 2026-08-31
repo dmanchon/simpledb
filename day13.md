@@ -1,3 +1,5 @@
+# Day 13: Deletion Vectors
+
 
 ### Context
 Up until now, we've built all the critical pieces of our immutable columnar storage engine:

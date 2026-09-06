@@ -2,6 +2,7 @@
 #include "simpledb/allocator.h"
 #include "simpledb/fts.h"
 #include "simpledb/schema_registry.h"
+#include "simpledb/storage.h"
 #include "simpledb/string_dict.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -132,17 +133,89 @@ int table_insert_batch(table_t *table, const void ***columnar_values, size_t num
     return 0;
 }
 
+static void write_string_pool(FILE *fp, char **strings, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        fwrite(strings[i], 1, strlen(strings[i]) + 1, fp);
+    }
+}
+
 int table_flush(table_t *table, const char *data_dir) {
-    fprintf(stderr, "table_flush not implemented\n");
-    abort();
-}
+    if (!table || !table->schema || !table->column_buffers || table->row_count == 0) {
+        return 0; // Nothing to flush
+    }
 
+    for (size_t i = 0; i < table->schema->count; i++) {
+        if (!table->column_buffers[i])
+            continue;
+
+        column_writer_t *writer = column_writer_create(data_dir, table->schema->columns[i].name,
+                                                       table->schema->columns[i].type);
+        switch (table->schema->columns[i].type) {
+        case COL_TYPE_I32:
+        case COL_TYPE_F32: {
+            buffer_i32_t *buf = (buffer_i32_t *)table->column_buffers[i];
+            column_writer_append(writer, buf->data, table->row_count);
+            buf->size = 0;
+            break;
+        }
+        case COL_TYPE_STRING_DICT: {
+            // first write the dict keys
+            string_dict_column_t *col = (string_dict_column_t *)table->column_buffers[i];
+            column_writer_append(writer, col->keys_buf->data, table->row_count);
+            col->keys_buf->size = 0;
+            // then write the original strings
+            char dict_path[256];
+            snprintf(dict_path, sizeof(dict_path), "%s/%s.dict", data_dir,
+                     table->schema->columns[i].name);
+            FILE *dfp = fopen(dict_path, "wb");
+            if (!dfp) {
+                fprintf(stderr, "[FATAL ERROR] cannot open file %s\n", dict_path);
+                exit(EXIT_FAILURE);
+            }
+            write_string_pool(dfp, col->dict->strings, col->dict->count);
+            fclose(dfp);
+            break;
+        }
+
+        case COL_TYPE_STRING: {
+            raw_string_column_t *col = (raw_string_column_t *)table->column_buffers[i];
+            column_writer_append(writer, col->strings, col->size);
+            for (size_t r = 0; r < col->size; r++) {
+                free(col->strings[r]);
+            }
+            col->size = 0;
+            break;
+        }
+        }
+        column_writer_close(writer);
+    }
+    // Register the new immutable part in table->parts
+    table_part_t **new_parts = realloc(table->parts, sizeof(table_part_t *) * (table->num_parts + 1));
+    if (!new_parts) return -1;
+    table->parts = new_parts;
+    table_part_t *part = malloc(sizeof(table_part_t));
+    if (!part) return -1;
+    strncpy(part->part_path, data_dir, sizeof(part->part_path) - 1);
+    part->part_path[sizeof(part->part_path) - 1] = '\0';
+    part->row_count = table->row_count;
+    table->parts[table->num_parts++] = part;
+    // Reset table row count
+    table->row_count = 0;
+    return 0;
+}
 table_part_t **table_get_parts(table_t *table, size_t *out_num_parts) {
-    fprintf(stderr, "table_get_parts not implemented\n");
-    abort();
+    if (!table) {
+        if (out_num_parts) *out_num_parts = 0;
+        return NULL;
+    }
+    if (out_num_parts) *out_num_parts = table->num_parts;
+    return table->parts;
 }
-
 void **table_get_active_buffer(table_t *table, size_t *out_row_count) {
-    fprintf(stderr, "table_get_active_buffer not implemented\n");
-    abort();
+    if (!table) {
+        if (out_row_count) *out_row_count = 0;
+        return NULL;
+    }
+    if (out_row_count) *out_row_count = table->row_count;
+    return table->column_buffers;
 }

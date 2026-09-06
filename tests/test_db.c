@@ -13,6 +13,7 @@
 #include "simpledb/table.h"
 #include "simpledb/tokenizer.h"
 #include "simpledb/deletion_vector.h"
+#include "simpledb/external_sort.h"
 #include <time.h>
 #include <assert.h>
 #include <stdint.h>
@@ -660,6 +661,97 @@ void test_table_e2e_batch_ingestion(void) {
     printf("Table E2E Batch Ingestion tests passed!\n");
 }
 
+static void test_table_flush_e2e(void) {
+    printf("Testing Table Flush E2E (Disk Serialization & Buffer Reset)...\n");
+
+    // 1. Create table & setup 4-column schema
+    table_t *table = table_create("events_flush");
+    assert(table != NULL);
+
+    schema_registry_t *schema = schema_registry_create();
+    schema_registry_add_column(schema, "user_id", COL_TYPE_I32);
+    schema_registry_add_column(schema, "score", COL_TYPE_F32);
+    schema_registry_add_column(schema, "country", COL_TYPE_STRING_DICT);
+    schema_registry_add_column(schema, "comment", COL_TYPE_STRING);
+    table->schema = schema;
+
+    table->column_buffers = calloc(schema->count, sizeof(void *));
+    table->column_buffers[0] = buffer_i32_create(4);
+    table->column_buffers[1] = buffer_i32_create(4);
+
+    string_dict_column_t *sdc = malloc(sizeof(string_dict_column_t));
+    sdc->dict = string_dict_create();
+    sdc->keys_buf = buffer_i32_create(4);
+    table->column_buffers[2] = sdc;
+
+    table->column_buffers[3] = raw_string_column_create(4);
+
+    // 2. Ingest batch of 3 rows
+    int32_t user_ids[] = { 201, 202, 203 };
+    float scores[] = { 10.5f, 20.0f, 30.5f };
+    const char *countries[] = { "US", "UK", "US" };
+    const char *comments[] = { "alpha", "beta", "gamma" };
+
+    const void **batch[4];
+    batch[0] = (const void *)user_ids;
+    batch[1] = (const void *)scores;
+    batch[2] = (const void *)countries;
+    batch[3] = (const void *)comments;
+
+    assert(table_insert_batch(table, (const void ***)batch, 4, 3) == 0);
+    assert(table->row_count == 3);
+
+    // 3. Flush in-memory data to disk
+    assert(table_flush(table, ".") == 0);
+
+    // 4. Assert in-memory buffer was reset
+    assert(table->row_count == 0);
+    buffer_i32_t *c0 = (buffer_i32_t *)table->column_buffers[0];
+    assert(c0->size == 0);
+    assert(c0->capacity >= 4); // Capacity retained!
+    (void)c0;
+
+    // 5. Assert part catalog registered the new immutable part
+    assert(table->num_parts == 1);
+    assert(table->parts[0]->row_count == 3);
+
+    // 6. Test Read-Path Metadata APIs
+    size_t active_rows = 999;
+    void **active_bufs = table_get_active_buffer(table, &active_rows);
+    assert(active_bufs != NULL && active_rows == 0);
+    (void)active_bufs;
+
+    size_t num_parts = 0;
+    table_part_t **parts = table_get_parts(table, &num_parts);
+    assert(parts != NULL && num_parts == 1);
+    assert(parts[0]->row_count == 3);
+    (void)parts;
+
+    // 7. Verify serialized files exist on disk
+    FILE *f_user_id = fopen("./user_id.bin", "rb");
+    assert(f_user_id != NULL);
+    fclose(f_user_id);
+
+    FILE *f_country_dict = fopen("./country.dict", "rb");
+    assert(f_country_dict != NULL);
+    fclose(f_country_dict);
+
+    FILE *f_comment_strings = fopen("./comment.strings", "rb");
+    assert(f_comment_strings != NULL);
+    fclose(f_comment_strings);
+
+    // Cleanup generated disk files
+    remove("./user_id.bin");
+    remove("./score.bin");
+    remove("./country.bin");
+    remove("./country.dict");
+    remove("./comment.bin");
+    remove("./comment.strings");
+
+    table_destroy(table);
+    printf("Table Flush E2E tests passed!\n");
+}
+
 void test_deletion_vector(void) {
     printf("Testing Deletion Vector...\n");
 
@@ -696,6 +788,73 @@ void test_deletion_vector(void) {
     printf("Deletion Vector tests passed!\n");
 }
 
+#if 0
+static void test_external_sorter_in_memory(void) {
+    printf("Testing External Sorter (In-Memory Fallback)...\n");
+
+    external_sorter_t *sorter = external_sorter_create(".", 20);
+    assert(sorter != NULL);
+
+    sort_record_t input[5] = {
+        { 40, 1 }, { 10, 2 }, { 50, 3 }, { 20, 4 }, { 30, 5 }
+    };
+    assert(external_sorter_push(sorter, input, 5) == 0);
+    assert(external_sorter_finish(sorter) == 0);
+
+    sort_record_t rec;
+    int32_t expected_keys[5] = { 10, 20, 30, 40, 50 };
+    for (int i = 0; i < 5; i++) {
+        assert(external_sorter_next(sorter, &rec) == true);
+        assert(rec.key == expected_keys[i]);
+    }
+    assert(external_sorter_next(sorter, &rec) == false);
+
+    external_sorter_destroy(sorter);
+    printf("External Sorter In-Memory tests passed!\n");
+}
+
+static void test_external_sorter_disk_spilling(void) {
+    printf("Testing External Sorter (Disk-Spilling K-Way Merge)...\n");
+
+    size_t mem_limit = 100;
+    size_t total_records = 1000;
+    external_sorter_t *sorter = external_sorter_create(".", mem_limit);
+    assert(sorter != NULL);
+
+    sort_record_t *input = malloc(sizeof(sort_record_t) * total_records);
+    for (size_t i = 0; i < total_records; i++) {
+        input[i].key = (int32_t)(total_records - i); // Reverse sorted keys
+        input[i].value = (int32_t)i;
+    }
+
+    for (size_t i = 0; i < total_records; i += 50) {
+        assert(external_sorter_push(sorter, input + i, 50) == 0);
+    }
+    free(input);
+
+    assert(external_sorter_finish(sorter) == 0);
+    assert(sorter->num_runs == 10);
+
+    sort_record_t rec;
+    int32_t prev_key = -1;
+    size_t count = 0;
+
+    while (external_sorter_next(sorter, &rec)) {
+        if (count > 0) {
+            assert(rec.key >= prev_key);
+        }
+        prev_key = rec.key;
+        count++;
+    }
+
+    assert(count == total_records);
+    assert(prev_key == (int32_t)total_records);
+
+    external_sorter_destroy(sorter);
+    printf("External Sorter Disk-Spilling tests passed!\n");
+}
+#endif
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -718,7 +877,11 @@ int main(void) {
     test_inverted_index();
     test_table_creation();
     test_table_e2e_batch_ingestion();
+    test_table_flush_e2e();
     test_deletion_vector();
+    // Day 15 External Sorter tests (deferred until Day 15):
+    // test_external_sorter_in_memory();
+    // test_external_sorter_disk_spilling();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

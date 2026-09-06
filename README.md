@@ -25,6 +25,17 @@
 - **[day3.md](day3.md)** — *Day 3: Zero-Copy Memory-Mapped Files (`mmap`) & OS Page Cache*
 - **[day4.md](day4.md)** — *Day 4: Build System, Compiler Optimizations & POSIX Micro-Benchmarking*
 - **[day5.md](day5.md)** — *Day 5: Column Vectors, Selection Vectors & Branchless Query Filtering*
+- **[day6.md](day6.md)** — *Day 6: High-Cardinality String Dictionaries*
+- **[day7.md](day7.md)** — *Day 7: Null Bitmaps & Dynamic Schema Registry*
+- **[day8.md](day8.md)** — *Day 8: SIMD APL Vector Primitives (Compress & Reduction)*
+- **[day9.md](day9.md)** — *Day 9: ClickHouse-Style On-Disk Column Layout & Marks Files (.mrk)*
+- **[day10.md](day10.md)** — *Day 10: Sparse Primary Index (primary.idx) & 2-Tier Pruning*
+- **[day11.md](day11.md)** — *Day 11: Column Reader (Zero-Copy Chunked Loading)*
+- **[day12.md](day12.md)** — *Day 12: Inverted Index & BM25 Scoring*
+- **[day13.md](day13.md)** — *Day 13: Roaring Bitset Deletion Vectors*
+- **[day14.md](day14.md)** — *Day 14: The Table Abstraction (Ingestion Layer)*
+- **[day14bis.md](day14bis.md)** — *Day 14 Bis: Table Flush & Immutable Part Serialization*
+- **[day15.md](day15.md)** — *Day 15: External Merge Sort (Disk-Spilling ORDER BY)*
 - **[plan.md](plan.md)** — *16-Day Architectural Master Plan, Python Productivization & Distributed Roadmap*
 - **[editor.md](editor.md)** — *Zed & Neovim Editing Shortcut Cheat-Sheet*
 

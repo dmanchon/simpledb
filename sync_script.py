@@ -119,6 +119,16 @@ write_local('/Users/dmanchon/repos/cdb/day13.md', day13_body)
 day14_body = read_local('/Users/dmanchon/repos/cdb/day14.md')
 write_local('/Users/dmanchon/repos/cdb/day14.md', day14_body)
 
+# Day 14 Bis
+day14bis_body = read_local('/Users/dmanchon/repos/cdb/day14bis.md') if os.path.exists('/Users/dmanchon/repos/cdb/day14bis.md') else ""
+if day14bis_body:
+    write_local('/Users/dmanchon/repos/cdb/day14bis.md', day14bis_body)
+
+# Day 15
+day15_body = read_local('/Users/dmanchon/repos/cdb/day15.md') if os.path.exists('/Users/dmanchon/repos/cdb/day15.md') else ""
+if day15_body:
+    write_local('/Users/dmanchon/repos/cdb/day15.md', day15_body)
+
 # Update Astro files
 astro_dir = '/Users/dmanchon/repos/astro-blog/src/content/blog'
 update_file(f'{astro_dir}/day0-motivations-and-influences.md', day0_body)
@@ -127,5 +137,19 @@ update_file(f'{astro_dir}/day2-zero-copy-typed-slices.md', day2_body)
 update_file(f'{astro_dir}/day3-zero-copy-mmap-files.md', day3_body)
 update_file(f'{astro_dir}/day13-deletion-vectors.md', day13_body)
 update_file(f'{astro_dir}/day14.md', day14_body)
+if day14bis_body:
+    day14bis_path = f'{astro_dir}/day14bis.md'
+    if not os.path.exists(day14bis_path):
+        with open(day14bis_path, 'w') as f:
+            f.write('---\ntitle: "Day 14 Bis: Table Flush & Immutable Part Serialization"\npubDate: 2026-08-28\ndescription: "Implementing streaming disk flush from RAM columnar buffers to immutable .bin files and managing part metadata."\n---\n\n')
+    update_file(day14bis_path, day14bis_body)
+if day15_body:
+    day15_path = f'{astro_dir}/day15.md'
+    if not os.path.exists(day15_path):
+        with open(day15_path, 'w') as f:
+            f.write('---\ntitle: "Day 15: External Merge Sort (Disk-Spilling ORDER BY)"\npubDate: 2026-08-29\ndescription: "Implementing out-of-core external merge sort with fixed memory budgets and K-way streaming min-heap merge."\n---\n\n')
+    update_file(day15_path, day15_body)
 
 print("Done")
+
+

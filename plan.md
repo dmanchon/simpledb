@@ -146,6 +146,10 @@
 - **Data Structures**: `table_t`
 - **Daily Code Goal**: Build the coordinating ingestion layer to multiplex rows into columnar files and update indexes simultaneously.
 
+#### 🔹 Day 14 Bis: Table Flush & Immutable Part Serialization
+- **Data Structures**: `table_flush`, `table_part_t`, metadata accessors
+- **Daily Code Goal**: Implement streaming disk flush from RAM columnar buffers to immutable `.bin` files and track part catalog metadata.
+
 #### 🔹 Day 15: External Merge Sort (Disk Spilling `ORDER BY`)
 - **Data Structures**: `external_sorter_t`
 - **Daily Code Goal**: Implement run generator spilling sorted runs to disk under memory limits.
@@ -154,11 +158,15 @@
 - **Data Structures**: `grace_hash_agg_t`
 - **Daily Code Goal**: Build disk-spilling hash aggregator handling high-cardinality `GROUP BY`.
 
-#### 🔹 Day 17: APL / K Vectorized Physical Execution Pipeline
-- **Data Structures**: `physical_operator_t`, `exec_pipeline_t`
-- **Daily Code Goal**: Assemble pipeline executing `scan` -> `filter` -> `gather` -> `aggregate`.
+#### 🔹 Day 17: The Multi-Part Table Scanner (Lazy Data Loading & Granule Pruning)
+- **Data Structures**: `table_scanner_t`, `block_t`
+- **Daily Code Goal**: Build unified pull-based scanner iterating across all immutable disk parts (`column_reader_t`) and live RAM buffers, pruning non-matching granules via the sparse primary index.
 
-#### 🔹 Day 18: Minimal SQL & K/q Query Parser & REPL CLI
+#### 🔹 Day 18: APL / K Vectorized Physical Execution Pipeline
+- **Data Structures**: `physical_operator_t`, `exec_pipeline_t`
+- **Daily Code Goal**: Assemble execution pipeline executing `scan` -> `filter` -> `gather` -> `aggregate`.
+
+#### 🔹 Day 19: Minimal SQL & K/q Query Parser & REPL CLI
 - **Data Structures**: `sql_lexer_t`, `sql_parser_t`, `repl_t`
 - **Daily Code Goal**: Complete the working database engine REPL shell in C11 executing queries in sub-50ms!
 

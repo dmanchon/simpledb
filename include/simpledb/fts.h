@@ -1,9 +1,7 @@
-// include/simpledb/fts.h
-
 #pragma once
+
 #include <stdint.h>
 #include <stddef.h>
-#include "simpledb/slice.h"
 #include "simpledb/bitmap.h"
 #include "simpledb/string_dict.h"
 

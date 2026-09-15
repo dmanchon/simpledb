@@ -173,7 +173,7 @@ When `table_flush(table, data_dir)` is invoked, several hardware and OS-level op
 Because columnar buffers store data as contiguous primitive arrays (`int32_t*`, `float*`), serialization avoids row-by-row branching. We invoke `fwrite(buf->data, sizeof(int32_t), buf->size, fp)`, allowing the OS kernel to stream consecutive 4KB disk pages straight into the OS Page Cache.
 
 #### 2. Granule Mark Serialization (`.mrk`)
-Through `column_writer_t` (built in Day 9), the flush pipeline records physical byte offsets into companion `.mrk` mark files every 8,192 rows. This preserves $\mathcal{O}(1)$ random-access entry points for future `mmap` zero-copy scans.
+Through `column_writer_t` (built in Day 9), the flush pipeline records physical byte offsets into companion `.mrk` mark files every 8,192 rows. This preserves `O(1)` random-access entry points for future `mmap` zero-copy scans.
 
 #### 3. String Flattening (Byte Pool + Offsets)
 In-memory pointers (`char*`) cannot be stored directly to disk because pointer addresses lose validity once the process restarts. During flush:
@@ -208,7 +208,7 @@ Every vector buffer (`buffer_i32_t`) tracks two distinct dimensions:
 * `capacity`: How many total elements the heap chunk can hold before needing to grow.
 
 When we set `col->keys_buf->size = 0`:
-* We perform an $\mathcal{O}(1)$ integer assignment.
+* We perform an `O(1)` integer assignment.
 * The physical memory allocation (`col->keys_buf->data`) remains allocated and warm in RAM.
 * When the next batch arrives in `table_insert_batch`, the engine writes into indices `0, 1, 2...` **without calling `malloc()` or `realloc()` at all!**
 
@@ -762,17 +762,18 @@ This is why `table_t` does not have a `table_read()` method: `table_t` is purely
 
 #### The Curriculum Roadmap: Which Day Does What?
 
-To see the master blueprint of how all these pieces click together across our 19-day plan:
+To see the master blueprint of how all these pieces click together across our 20-day plan:
 
 | Milestone | Subsystem | Responsibility |
 | :--- | :--- | :--- |
 | **Day 3 & Day 11** | Zero-Copy Column Reader (`column_reader_t`) | Reads 8,192-row granules lazily via `mmap`, skipping unselected blocks. *(Implemented)* |
 | **Day 10** | Sparse Index Pruner (`sparse_index_t`) | Evaluates query bounds against `primary.idx` in RAM without touching disk. *(Implemented)* |
-| **Day 14 & 14 Bis** | Table Ingestion & Flush (`table_t`) | Manages RAM insertion buffers, triggers immutable disk flushes, and exposes metadata getters (`table_get_parts`, `table_get_active_buffer`). *(Today)* |
+| **Day 14 & 14 Bis** | Table Ingestion & Flush (`table_t`) | Manages RAM insertion buffers, triggers immutable disk flushes, and exposes metadata getters (`table_get_parts`, `table_get_active_buffer`). *(Implemented)* |
 | **Day 15 & Day 16** | Out-of-Core Execution (`ORDER BY` & `GROUP BY`) | External Merge Sort and Partitioned Grace Hash Aggregation. |
 | **Day 17** | **The Multi-Part Table Scanner (`table_scanner_t`)** | **Dedicated Data Loading Day!** Unifies pulling lazily from `column_reader_t` across all immutable disk parts, pruning via `sparse_index`, and unioning live RAM buffers into 8,192-row `block_t` streams. |
 | **Day 18** | **Vectorized Physical Execution Pipeline (`exec_pipeline_t`)** | The compute engine: assembles `filter` (APL compress) $\rightarrow$ `gather` (late materialization) $\rightarrow$ `project` $\rightarrow$ `aggregate`. |
-| **Day 19** | **Minimal SQL Parser & REPL CLI Shell** | The user-facing shell: `db_open()` scans disk directories on boot, executes SQL queries against the pipeline, and displays formatted results in < 50ms! |
+| **Day 19** | **The MergeTree Part Compactor (`table_merge_parts`)** | Reusing Day 15's Min-Heap and Day 13's Deletion Vectors to merge multiple immutable disk parts into consolidated parts, rebuilding sparse indices. |
+| **Day 20** | **Minimal SQL Parser & REPL CLI Shell** | The user-facing shell: `db_open()` scans disk directories on boot, executes SQL queries against the pipeline, and displays formatted results in < 50ms! |
 
 ---
 

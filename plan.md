@@ -166,7 +166,11 @@
 - **Data Structures**: `physical_operator_t`, `exec_pipeline_t`
 - **Daily Code Goal**: Assemble execution pipeline executing `scan` -> `filter` -> `gather` -> `aggregate`.
 
-#### 🔹 Day 19: Minimal SQL & K/q Query Parser & REPL CLI
+#### 🔹 Day 19: The MergeTree Part Compactor (Background Part Merging Engine)
+- **Data Structures**: `table_merge_parts()`, `part_merger_t`
+- **Daily Code Goal**: Reusing Day 15's $K$-way Min-Heap and Day 13's Deletion Vectors, merge multiple immutable on-disk parts into a single consolidated, deduplicated part, rebuilding `.mrk` mark files and generating a unified sparse index (`primary.idx`).
+
+#### 🔹 Day 20: Minimal SQL & K/q Query Parser & REPL CLI
 - **Data Structures**: `sql_lexer_t`, `sql_parser_t`, `repl_t`
 - **Daily Code Goal**: Complete the working database engine REPL shell in C11 executing queries in sub-50ms!
 

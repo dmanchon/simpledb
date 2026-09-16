@@ -398,41 +398,245 @@ If runs were spilled to disk during ingestion:
    > **Why Does `spill_run(sorter)` Need No Extra Arguments?**
    > All required state—the memory buffer pointer `sorter->in_mem_buf`, the item count `sorter->in_mem_count`, the target directory `sorter->temp_dir`, the current run counter `sorter->num_runs`, and the catalog arrays `sorter->run_paths` / `sorter->run_paths_capacity`—are already encapsulated inside `external_sorter_t`. The helper takes only `sorter`.
 
-2. **Allocate Phase 2 Merge Structures:**
+2. **Allocate Phase 2 Merge Structures & Construct Standalone Min-Heap:**
    ```c
-   sorter->run_files = malloc(sorter->num_runs * sizeof(FILE *));
-   sorter->heap.data = malloc(sorter->num_runs * sizeof(heap_node_t));
-   if (!sorter->run_files || !sorter->heap.data) return -1;
-   sorter->heap.capacity = sorter->num_runs;
-   sorter->heap.size = 0;
+   // Allocate standalone priority queue for K-way tournament
+   sorter->heap = min_heap_create(sorter->num_runs);
+   if (!sorter->heap) return -1;
+
+   // Allocate open file pointer catalog and tuple cache
+   sorter->run_files = malloc(sizeof(FILE *) * sorter->num_runs);
+   if (!sorter->run_files) return -1;
+
+   sorter->run_current_records = malloc(sizeof(sort_record_t) * sorter->num_runs);
+   if (!sorter->run_current_records) return -1;
    ```
-3. **Open All Run Files & Seed the Min-Heap (Step 4):**
-   Open each run file in binary read mode (`"rb"`), read exactly 1 record from each, wrap it with `.run_idx = i`, and push it into the heap via sift-up:
+
+3. **Open All Run Files & Seed the Tournament:**
+   Open each run file in binary read mode (`"rb"`), read exactly 1 record from each, store it into `run_current_records[i]`, and push the key and run index into the min-heap:
    ```c
    for (size_t i = 0; i < sorter->num_runs; i++) {
        sorter->run_files[i] = fopen(sorter->run_paths[i], "rb");
        if (!sorter->run_files[i]) return -1;
+
        sort_record_t rec;
-       if (fread(&rec, sizeof(sort_record_t), 1, sorter->run_files[i]) == 1) {
-           size_t idx = sorter->heap.size++;
-           sorter->heap.data[idx] = (heap_node_t){ .record = rec, .run_idx = i };
-           heap_sift_up(&sorter->heap, idx);
+       if (fread(&rec, sizeof(sort_record_t), 1, sorter->run_files[i]) != 1) {
+           return -1; // Corrupted run file: every spilled run must contain >= 1 tuple
        }
+       sorter->run_current_records[i] = rec;
+       min_heap_push(sorter->heap, rec.key_value, (void *)(uintptr_t)i);
    }
    ```
-   The initial K candidates are loaded into the tournament bracket. Return `0`.
+   The initial $K$ candidates are loaded into the tournament bracket. Set `sorter->finished_ingestion = true;` and return `0`.
 
    > [!WARNING]
    > **Traps in the Tournament Seeding Loop:**
-   > 1. **The `fread` Inverted Return Value Trap:** `fread(ptr, size, count, stream)` returns the **number of items read**, NOT an error code (0). When reading 1 item, a successful read returns `1`! If you write `if (fread(...) != 0) return -1;`, `1 != 0` evaluates to true, causing the function to abort with an error on **success**! Always check `if (fread(...) != 1) return -1;` (or `if (fread(...) == 1)`).
-   > 2. **The Stationary Heap Size Gotcha:** If you assign `sorter->heap.data[sorter->heap.size] = node;` without incrementing `heap.size`, every run overwrites index `0`, leaving `heap.size` at `0` at the end of the loop!
-   > 3. **The Post-Increment Off-by-One Sift Trap:** Writing `sorter->heap.data[sorter->heap.size++] = node; heap_sift_up(&sorter->heap, sorter->heap.size);` is a subtle off-by-one bug! Because `size++` increments `heap.size` immediately after the assignment, calling `heap_sift_up` with `sorter->heap.size` passes the index of the **next uninitialized slot** rather than the slot where `node` was stored! Always capture the index:
-   >    ```c
-   >    size_t idx = sorter->heap.size++;
-   >    sorter->heap.data[idx] = node;
-   >    heap_sift_up(&sorter->heap, idx);
-   >    ```
-   >    Or encapsulate in a `heap_push(&sorter->heap, record, i)` helper.
+   > 1. **The `fread` Inverted Return Value Trap:** `fread(ptr, size, count, stream)` returns the **number of items read**, NOT an error code (0). When reading 1 item, a successful read returns `1`! If you write `if (fread(...) != 0) return -1;`, `1 != 0` evaluates to true, causing the function to abort with an error on **success**! Always check `if (fread(...) != 1) return -1;`.
+   > 2. **The Escaped Stack Variable Trap (`(void *)&rec`):** Passing the address of local stack variable `&rec` into `payload` creates a dangling pointer: on the next loop iteration, that stack memory is overwritten, corrupting all runs! Instead, we allocate a heap array `sorter->run_current_records` of size $K$, store the tuple there, and pass the run index directly as a scalar payload: `(void *)(uintptr_t)i`.
+   > 3. **Encapsulated Heap Invariant:** By calling `min_heap_push()`, `min_heap_sift_up` is executed automatically inside the standalone priority queue module, keeping `external_sort.c` completely decoupled from array navigation details.
+
+
+---
+
+#### Step 4: K-Way Merge Initialization — The "Decks of Cards" Tournament
+
+What does *"open K run files, read 1st tuple from each, seed Min-Heap"* actually mean in plain English and physical reality?
+
+##### The Intuition: 3 Decks of Sorted Playing Cards
+Imagine you have 3 decks of playing cards on a table. Each deck is **already individually sorted** from lowest to highest:
+* **Deck 0:** `[ 5, 12, 40, 99 ]`
+* **Deck 1:** `[ 2,  8, 15, 30 ]`
+* **Deck 2:** `[ 7, 10, 25, 50 ]`
+
+You want to produce a single, globally sorted pile of cards.
+**Where is the absolute smallest card in the entire room?**
+It is physically impossible for the smallest card to be buried under `5`, `2`, or `7`. The smallest card in the room **must be one of the top cards currently visible on the 3 decks**!
+
+Therefore:
+1. You do not need to look at all 12 cards.
+2. You only look at the **top card of each deck**: `5` (Deck 0), `2` (Deck 1), `7` (Deck 2).
+3. You compare those 3 cards. The winner is `2`.
+4. You pick up `2` and place it in your output pile.
+5. Now Deck 1's top card is gone! You flip the next card from Deck 1: `8`.
+6. Your new visible candidates on the table are: `5` (Deck 0), `8` (Deck 1), `7` (Deck 2).
+7. Who is the winner now? `5`! You pick up `5`, and flip the next card from Deck 0: `12`.
+
+At any microsecond, **you only ever hold 3 cards in your hand**, no matter if each deck contains 10 cards or 10 billion cards!
+
+```text
+Run 0 File: [ 5, 12, 40, 99 ] ──► (Read top card: 5) ──┐
+                                                        │
+Run 1 File: [ 2,  8, 15, 30 ] ──► (Read top card: 2) ──┼──► [ Min-Heap Tournament: Winner = 2 ]
+                                                        │
+Run 2 File: [ 7, 10, 25, 50 ] ──► (Read top card: 7) ──┘
+```
+
+##### What the Computer Physically Does in C (Bytes & File Pointers)
+Now translate that card table directly to the operating system and CPU:
+1. **Each "deck" is a `.run` file on disk.** In Phase 1, we wrote $K$ files (`run_0000.run`, `run_0001.run`, ...). Each file contains millions of records, already sorted.
+2. **Open K Handles (`run_files[i] = fopen(...)`):**
+   The operating system gives us $K$ open file pointers. Each file's read cursor starts parked at byte 0 (the top of the deck).
+3. **Read Exactly 1 Tuple From Each (`fread(..., 1, fp)`):**
+   We do **not** load the files into RAM! We tell the OS: *"Read exactly ONE 8-byte `sort_record_t` from file 0, ONE from file 1, ..., ONE from file K-1."*
+   If we have 10 runs, our RAM holds **only 10 tuples (80 bytes)**!
+4. **"Seed the Min-Heap" (Enter Candidates into the Tournament Bracket):**
+   "Seeding" means loading those $K$ initial records into our priority queue:
+   ```c
+   // 1. Cache the full record in the sorter's persistent buffer:
+   sorter->run_current_records[i] = rec;
+
+   // 2. Enter the contestant into the standalone priority queue:
+   //    - key: 64-bit sort key value (rec.key_value)
+   //    - payload: run index encoded directly in the pointer slot: (void *)(uintptr_t)i
+   min_heap_push(sorter->heap, rec.key_value, (void *)(uintptr_t)i);
+   ```
+   The binary min-heap organizes these $K$ contestants in $O(K \log K)$ time so that `min_heap_peek(sorter->heap, &top)` is guaranteed to yield the overall minimum element across all runs.
+   The tournament is now ready to stream!
+
+#### Step 5: Streaming Pull Iteration (`external_sorter_next`)
+
+```c
+bool external_sorter_next(external_sorter_t *sorter, sort_record_t *out_record);
+```
+
+The consumer iteratively requests the next sorted record via `external_sorter_next(sorter, &out_record)` until it returns `false` (signaling EOF).
+
+##### 1. State Machine & Parameter Validation:
+```c
+if (!sorter || !out_record || !sorter->finished_ingestion) {
+    return false;
+}
+```
+If `external_sorter_finish()` was never called, reading from the sorter is an illegal operation.
+
+##### 2. Branch A — The Fast Path (`sorter->num_runs == 0`):
+If all records fit in RAM, no run files or min-heap were ever touched.
+We simply serve elements directly from the sorted contiguous buffer in RAM using our read bookmark `in_mem_iter_idx`:
+```c
+if (sorter->num_runs == 0) {
+    if (sorter->in_mem_iter_idx < sorter->in_mem_count) {
+        *out_record = sorter->in_mem_buf[sorter->in_mem_iter_idx++];
+        return true;
+    }
+    return false; // All in-memory records exhausted (EOF)
+}
+```
+Pure $O(1)$ memory copies with 100% cache-line throughput!
+
+##### 3. Branch B — The Spilled Merge Path (`sorter->num_runs > 0`):
+The records stream through the K-Way Min-Heap tournament using our encapsulated priority queue API:
+
+1. **Peek the Current Champion:**
+   We inspect the overall minimum element without removing it yet:
+   ```c
+   heap_node_t top;
+   if (!min_heap_peek(sorter->heap, &top)) {
+       return false; // Heap is empty -> all runs on disk are completely exhausted (EOF)
+   }
+   ```
+2. **Extract the Record & Run Index:**
+   The `payload` directly encodes the winning run index `(size_t)(uintptr_t)top.payload`.
+   We retrieve the full record from our persistent cache and hand it to the caller:
+   ```c
+   size_t run_idx = (size_t)(uintptr_t)top.payload;
+   *out_record = sorter->run_current_records[run_idx];
+   ```
+3. **Replenish from the Winning Run File:**
+   To maintain the streaming tournament, we fetch the next record from the exact run file that just won:
+   ```c
+   sort_record_t next_record;
+   if (fread(&next_record, sizeof(sort_record_t), 1, sorter->run_files[run_idx]) == 1) {
+       // Case 1: The run has more records!
+       // Update the run's current record and sink the newcomer in O(log K):
+       sorter->run_current_records[run_idx] = next_record;
+       min_heap_replace_top(sorter->heap, next_record.key_value, (void *)(uintptr_t)run_idx);
+   } else {
+       // Case 2: The run file reached EOF! That run is completely drained.
+       // Pop the exhausted champion, shrinking the tournament from K to K-1 in O(log K):
+       min_heap_pop(sorter->heap, &top);
+   }
+   return true;
+   ```
+
+Zero disk seeking, bounded RAM, single $O(\log K)$ step per tuple.
+
+> [!WARNING]
+> **The Premature Tournament Abort Trap: `fread != 1` is EOF, NOT an Error!**
+> A natural reflex when checking `fread` is to write `if (fread(...) != 1) return -1;`.
+> While a failed read during initial seeding in `finish()` indicates file corruption (since every spilled run contains at least one tuple), in `external_sorter_next()` `fread != 1` simply signals **End of File (EOF)** for that specific run!
+> If you return `-1` (or `false`) when one run runs out of cards, the sorter terminates prematurely, throwing away all the remaining tuples in the other $K-1$ run files!
+> Instead:
+> 1. That run is now exhausted.
+> 2. Evict it from the tournament: `min_heap_pop(sorter->heap, &top);` (shrinking the active tournament from $K$ to $K-1$).
+> 3. Return `true`, because the champion was already copied to `*out_record`!
+
+> [!CAUTION]
+> **The Two Infinite Loop Traps in `external_sorter_next`:**
+> 1. **The In-Memory Count-Increment Trap (`in_mem_count++`):**
+>    Writing `*out_record = sorter->in_mem_buf[sorter->in_mem_count++];` is a lethal bug:
+>    - `in_mem_count` is the **total number of elements** in the buffer.
+>    - Indexing at `in_mem_count` starts reading out of bounds from element $N$, and increments to $N+1, N+2, \dots$ forever without ever returning `false`!
+>    - Always use the dedicated iterator offset `in_mem_iter_idx`:
+>      ```c
+>      if (sorter->in_mem_iter_idx < sorter->in_mem_count) {
+>          *out_record = sorter->in_mem_buf[sorter->in_mem_iter_idx++];
+>          return true;
+>      }
+>      return false; // Signals EOF to consumer!
+>      ```
+> 2. **The Zombie Champion Loop (Missing `else { min_heap_pop(); }`):**
+>    If `fread != 1` has no `else` block to call `min_heap_pop`, the exhausted run is **never evicted from the heap**!
+>    On the subsequent call to `next()`, `min_heap_peek` returns the exact same exhausted champion at the root. It tries `fread` again, does nothing, and emits duplicate stale tuples in an infinite loop! Always pop on EOF.
+
+#### Step 6: Teardown & Ephemeral Cleanup (`external_sorter_destroy`)
+
+Spilled runs are ephemeral scratch files, not permanent database parts. Furthermore, analytical queries often abort early (e.g., when a query has `LIMIT 10`, the caller destroys the sorter long before all run files are drained!).
+
+`external_sorter_destroy()` must execute a thorough cleanup checklist to guarantee zero file descriptor leaks, zero orphaned scratch files on disk, and zero memory leaks:
+
+1. **Close Any Active File Descriptors (`run_files`):**
+   If the query stopped early (or completed), any open `FILE*` handles in `sorter->run_files` must be closed to avoid leaking OS file descriptors (`EMFILE`):
+   ```c
+   if (sorter->run_files) {
+       for (size_t i = 0; i < sorter->num_runs; i++) {
+           if (sorter->run_files[i]) {
+               fclose(sorter->run_files[i]);
+               sorter->run_files[i] = NULL;
+           }
+       }
+       free(sorter->run_files);
+   }
+   ```
+2. **Unlink Files & Free Path Strings (`run_paths`):**
+   Each run generated during Phase 1 allocated both a file on disk AND a heap string in RAM (`strdup(path)`):
+   ```c
+   if (sorter->run_paths) {
+       for (size_t i = 0; i < sorter->num_runs; i++) {
+           if (sorter->run_paths[i]) {
+               remove(sorter->run_paths[i]); // Unlink / delete file from disk
+               free(sorter->run_paths[i]);   // Free heap string
+           }
+       }
+       free(sorter->run_paths);             // Free the array of char* pointers
+   }
+   ```
+3. **Free Tuple Cache & Priority Queue:**
+   ```c
+   free(sorter->run_current_records);
+   if (sorter->heap) {
+       min_heap_destroy(sorter->heap);
+   }
+   ```
+4. **Free In-Memory Staging Buffer & Struct Container:**
+   ```c
+   free(sorter->in_mem_buf);
+   free(sorter);
+   ```
+
+> [!TIP]
+> **C Pointer Safety Note:** In standard C, `free(NULL)` is guaranteed to be a safe no-op. If `num_runs == 0` (such as on the fast path), `run_paths`, `run_files`, `run_current_records`, and `sorter->heap` remain `NULL`. Passing them to `free()` or `min_heap_destroy(NULL)` is completely safe, while wrapping pointer array loops with `if (sorter->run_paths)` guards against dereferencing `NULL` when `num_runs == 0`.
+
+Zero orphaned files in `/tmp`, zero file descriptor leaks, zero bytes leaked under AddressSanitizer.
 
 ---
 
@@ -483,7 +687,8 @@ Notice how [`external_sorter_destroy()`](file:///Users/dmanchon/repos/cdb/includ
 ```c
 if (sorter->run_files) { ... free(sorter->run_files); }
 if (sorter->run_paths) { ... free(sorter->run_paths); }
-free(sorter->heap.data);
+free(sorter->run_current_records);
+if (sorter->heap) min_heap_destroy(sorter->heap);
 free(sorter->in_mem_buf);
 free(sorter);
 ```
@@ -515,179 +720,6 @@ In a single-threaded batch script, that intuition is often true. But in a databa
    If an ad-hoc `SELECT ... ORDER BY` query calls `exit(EXIT_FAILURE)` due to memory exhaustion, the process abruptly terminates while a background flusher is writing a `.bin` or `.mrk` file! This leaves half-written, corrupted parts on disk that require manual surgery or recovery.
    By returning `-1`, the failure's blast radius is strictly confined to the user's `SELECT`, while background disk writes and ongoing data integrity remain completely uncompromised.
 
----
-
-#### Step 4: K-Way Merge Initialization — The "Decks of Cards" Tournament
-
-What does *"open K run files, read 1st tuple from each, seed Min-Heap"* actually mean in plain English and physical reality?
-
-##### The Intuition: 3 Decks of Sorted Playing Cards
-Imagine you have 3 decks of playing cards on a table. Each deck is **already individually sorted** from lowest to highest:
-* **Deck 0:** `[ 5, 12, 40, 99 ]`
-* **Deck 1:** `[ 2,  8, 15, 30 ]`
-* **Deck 2:** `[ 7, 10, 25, 50 ]`
-
-You want to produce a single, globally sorted pile of cards.
-**Where is the absolute smallest card in the entire room?**
-It is physically impossible for the smallest card to be buried under `5`, `2`, or `7`. The smallest card in the room **must be one of the top cards currently visible on the 3 decks**!
-
-Therefore:
-1. You do not need to look at all 12 cards.
-2. You only look at the **top card of each deck**: `5` (Deck 0), `2` (Deck 1), `7` (Deck 2).
-3. You compare those 3 cards. The winner is `2`.
-4. You pick up `2` and place it in your output pile.
-5. Now Deck 1's top card is gone! You flip the next card from Deck 1: `8`.
-6. Your new visible candidates on the table are: `5` (Deck 0), `8` (Deck 1), `7` (Deck 2).
-7. Who is the winner now? `5`! You pick up `5`, and flip the next card from Deck 0: `12`.
-
-At any microsecond, **you only ever hold 3 cards in your hand**, no matter if each deck contains 10 cards or 10 billion cards!
-
-```text
-Run 0 File: [ 5, 12, 40, 99 ] ──► (Read top card: 5) ──┐
-                                                        │
-Run 1 File: [ 2,  8, 15, 30 ] ──► (Read top card: 2) ──┼──► [ Min-Heap Tournament: Winner = 2 ]
-                                                        │
-Run 2 File: [ 7, 10, 25, 50 ] ──► (Read top card: 7) ──┘
-```
-
-##### What the Computer Physically Does in C (Bytes & File Pointers)
-Now translate that card table directly to the operating system and CPU:
-1. **Each "deck" is a `.run` file on disk.** In Phase 1, we wrote `K` files (`run_0000.run`, `run_0001.run`, ...). Each file contains millions of records, already sorted.
-2. **Open K Handles (`run_files[i] = fopen(...)`):**
-   The operating system gives us `K` open file pointers. Each file's read cursor starts parked at byte 0 (the top of the deck).
-3. **Read Exactly 1 Tuple From Each (`fread(..., 1, fp)`):**
-   We do **not** load the files into RAM! We tell the OS: *"Read exactly ONE 8-byte `sort_record_t` from file 0, ONE from file 1, ..., ONE from file K-1."*
-   If we have 10 runs, our RAM holds **only 10 tuples (80 bytes)**!
-4. **"Seed the Min-Heap" (Enter Candidates into the Tournament Bracket):**
-   "Seeding" just means placing those `K` initial records into our heap array (`min_heap_t`).
-   Because we need to know where each record came from when it wins, we wrap each record in a `heap_node_t`:
-   ```c
-   heap_node_t node = {
-       .record = rec,     // e.g. key = 2, row_id = 45
-       .run_idx = 1       // "I came from Deck 1 (run_0001.run)!"
-   };
-   ```
-   The binary min-heap organizes these `K` contestants in `O(K log K)` time so that `heap.data[0]` is guaranteed to be the overall minimum element across all runs.
-   The tournament is now ready to stream!
-
-#### Step 5: Streaming Pull Iteration (`external_sorter_next`)
-
-```c
-bool external_sorter_next(external_sorter_t *sorter, sort_record_t *out_record);
-```
-
-The consumer iteratively requests the next sorted record via `external_sorter_next(sorter, &out_record)` until it returns `false` (signaling EOF).
-
-##### 1. State Machine & Parameter Validation:
-```c
-if (!sorter || !out_record || !sorter->finished_ingestion) {
-    return false;
-}
-```
-If `external_sorter_finish()` was never called, reading from the sorter is an illegal operation.
-
-##### 2. Branch A — The Fast Path (`sorter->num_runs == 0`):
-If all records fit in RAM, no run files or min-heap were ever touched.
-We simply serve elements directly from the sorted contiguous buffer in RAM using our read bookmark `in_mem_iter_idx`:
-```c
-if (sorter->num_runs == 0) {
-    if (sorter->in_mem_iter_idx < sorter->in_mem_count) {
-        *out_record = sorter->in_mem_buf[sorter->in_mem_iter_idx++];
-        return true;
-    }
-    return false; // All in-memory records exhausted (EOF)
-}
-```
-Pure $O(1)$ memory copies with 100% cache-line throughput!
-
-##### 3. Branch B — The Spilled Merge Path (`sorter->num_runs > 0`):
-The records are streaming through the K-Way Min-Heap tournament:
-
-1. **Check for Dataset Exhaustion:**
-   If `sorter->heap.size == 0`, every single run file on disk has reached EOF. There are zero remaining records; return `false`.
-2. **Crown the Champion:**
-   Because the min-heap guarantees that the minimum element across all active runs is at the root:
-   ```c
-   *out_record = sorter->heap.data[0].record;
-   size_t run_idx = sorter->heap.data[0].run_idx;
-   ```
-3. **Replenish from That Specific Run:**
-   To keep the tournament fair, we must pull the next card from the deck that just won:
-   ```c
-   sort_record_t next_record;
-   if (fread(&next_record, sizeof(sort_record_t), 1, sorter->run_files[run_idx]) == 1) {
-       // Case 1: The deck has more cards!
-       // Place the new card at the root and let it sink down to its rightful depth:
-       sorter->heap.data[0].record = next_record;
-       heap_sift_down(&sorter->heap, 0);
-   } else {
-       // Case 2: The run file reached EOF! That deck is completely drained!
-       // 1. Close the file handle immediately:
-       fclose(sorter->run_files[run_idx]);
-       sorter->run_files[run_idx] = NULL;
-
-       // 2. Shrink the heap: move the LAST element in the array to the root:
-       sorter->heap.data[0] = sorter->heap.data[sorter->heap.size - 1];
-       sorter->heap.size--;
-
-       // 3. Sift down the replacement element to restore min-heap order:
-       if (sorter->heap.size > 0) {
-           heap_sift_down(&sorter->heap, 0);
-       }
-   }
-   return true;
-   ```
-
-Zero disk seeking, bounded RAM, $O(\log K)$ replenishment per tuple.
-
-#### Step 6: Teardown & Ephemeral Cleanup (`external_sorter_destroy`)
-
-Spilled runs are ephemeral scratch files, not permanent database parts. Furthermore, analytical queries often abort early (e.g., when a query has `LIMIT 10`, the caller destroys the sorter long before all run files are drained!).
-
-`external_sorter_destroy()` must execute a thorough cleanup checklist to guarantee zero file descriptor leaks, zero orphaned scratch files on disk, and zero memory leaks:
-
-1. **Close Any Active File Descriptors (`run_files`):**
-   If the query stopped early (or completed), any open `FILE*` handles in `sorter->run_files` must be closed to avoid leaking OS file descriptors (`EMFILE`):
-   ```c
-   if (sorter->run_files) {
-       for (size_t i = 0; i < sorter->num_runs; i++) {
-           if (sorter->run_files[i]) {
-               fclose(sorter->run_files[i]);
-               sorter->run_files[i] = NULL;
-           }
-       }
-       free(sorter->run_files);
-   }
-   ```
-2. **Unlink Files & Free Path Strings (`run_paths`):**
-   Each run generated during Phase 1 allocated both a file on disk AND a heap string in RAM (`strdup(path)`):
-   ```c
-   if (sorter->run_paths) {
-       for (size_t i = 0; i < sorter->num_runs; i++) {
-           if (sorter->run_paths[i]) {
-               remove(sorter->run_paths[i]); // Unlink / delete file from disk
-               free(sorter->run_paths[i]);   // Free heap string
-           }
-       }
-       free(sorter->run_paths);             // Free the array of char* pointers
-   }
-   ```
-3. **Free Priority Queue Buffer (`heap.data`):**
-   ```c
-   if (sorter->heap.data) {
-       free(sorter->heap.data);
-   }
-   ```
-4. **Free In-Memory Staging Buffer & Struct Container:**
-   ```c
-   free(sorter->in_mem_buf);
-   free(sorter);
-   ```
-
-> [!TIP]
-> **C Pointer Safety Note:** In standard C, `free(NULL)` is guaranteed to be a safe no-op. If `num_runs == 0` (such as on the fast path), `run_paths`, `run_files`, and `heap.data` remain `NULL`. Passing them to `free()` is completely safe, while wrapping pointer array loops with `if (sorter->run_paths)` guards against dereferencing `NULL` when `num_runs == 0`.
-
-Zero orphaned files in `/tmp`, zero file descriptor leaks, zero bytes leaked under AddressSanitizer.
 
 ---
 
@@ -802,58 +834,36 @@ typedef struct {
 
 ---
 
-#### 2. `heap_node_t`: Heap Element with Stream Provenance
+#### 2. `heap_node_t`: Standalone Node Pairing Key and Opaque Payload
 
 ```c
 typedef struct {
-    sort_record_t record; // The actual tuple (key, value)
-    size_t run_idx;       // Provenance: which run file did this come from?
+    int64_t key;      // Primitive sort key (compared directly via hardware ALU arithmetic)
+    void *payload;    // Opaque caller payload (holds run index encoded via (void *)(uintptr_t)i)
 } heap_node_t;
 ```
 
-* **Why `record` (`sort_record_t`)?**
-  The heap must inspect `record.key` to maintain the min-heap invariant (`parent.key <= child.key`), and it must emit `record` when popped at the root.
-* **Why `run_idx` (`size_t`)?**
-  **This is the most critical field in Phase 2.**
-  When the min-heap pops the minimum record from the root, the heap needs to pull the *next* replacement record to keep the merge flowing.
-  **From which of the K run files should it read?**
-  Without `run_idx`, the sorter has no idea which run file produced this tuple! By tagging every heap node with its originating `run_idx`, the engine instantly knows:
-  `fread(&next_rec, sizeof(sort_record_t), 1, sorter->run_files[root.run_idx]);`
-  It pulls precisely one record from the stream that just advanced, preserving total ordering across all streams.
-
-> [!NOTE]
-> **Architectural Dilemma: Why Not Generic `void *` for the Heap Node?**
-> You asked a brilliant question: *Why hardcode `sort_record_t record; size_t run_idx;` in the heap node? Wouldn't a generic `void *` be cleaner for a reusable data structure?*
-> 
-> There are three distinct ways systems engines design priority queues, each with radical performance tradeoffs:
-> 
-> 1. **The Pure Generic Approach (`void *` + Function Pointer Comparator):**
->    ```c
->    typedef struct { void *item; } generic_heap_node_t;
->    typedef int (*heap_cmp_fn)(const void *a, const void *b);
->    ```
->    * **Pros:** 100% reusable across the entire codebase.
->    * **Cons (The Performance Killer):** During `sift_down`, the CPU must make an **indirect function pointer call (`cmp(a, b)`) on every single comparison**. In a 100M-row sort, that means **1 Billion indirect calls**, completely defeating compiler inlining, SIMD vectorization, and CPU branch prediction! Furthermore, if `item` points to heap allocations, it introduces pointer chasing and cache misses.
-> 2. **The Key + Generic Payload Pattern (`int64_t key, void *payload`):**
->    ```c
->    typedef struct {
->        int64_t key;   // Compared directly via hardware ALU arithmetic (ZERO function calls!)
->        void *payload; // Opaque pointer to arbitrary caller context (e.g. run file or part reader)
->    } heap_node_t;
->    ```
->    * **Pros:** Generic payload, but comparisons remain fully inlined integer operations. Exactly 16 bytes (fits 4 nodes per 64-byte cache line).
-> 3. **The Monomorphic Specialized Struct (ClickHouse / C++ Template style):**
->    In ClickHouse, priority queues are C++ templates (`PriorityQueue<T>`). The compiler emits specialized machine code for the exact concrete type with zero overhead.
->    In C, our concrete `heap_node_t` (`sort_record_t record; size_t run_idx;`) achieves the exact same zero-cost abstraction: 16 bytes, flat contiguous RAM, direct integer comparisons, and zero pointer dereferences.
+* **Why `key` (`int64_t`)?**
+  The heap must inspect `key` on every single comparison to maintain the min-heap invariant (`parent.key <= child.key`).
+  By making `key` a primitive 64-bit integer, comparisons are executed with a **single CPU instruction (`CMP` / `B.LT`)**. There are **zero indirect function pointer calls**, zero branch mispredictions, and full compiler auto-vectorization!
+* **Why `payload` (`void *`)?**
+  **This is the key to decoupling.**
+  In Phase 2, when the heap crowns the minimum tuple, the engine needs to know: *from which of the $K$ run files did this tuple originate?*
+  Instead of hardcoding external sorter structs into the heap, `payload` provides a universal 8-byte opaque slot:
+  - In `external_sort`, we encode the run index directly: `(void *)(uintptr_t)run_idx`.
+  - Zero dynamic memory allocations, zero pointer dereferences, and zero dangling pointers.
+* **Exact 16-Byte Footprint:**
+  8 bytes (`int64_t key`) + 8 bytes (`void *payload`) = exactly **16 bytes**.
+  Exactly **4 nodes fit in a single 64-byte L1 CPU cache line**, delivering maximum cache-line utilization during sift-up and sift-down operations!
 
 ---
 
-#### 3. `min_heap_t`: The K-Way Tournament Priority Queue
+#### 3. `min_heap_t`: Standalone Priority Queue Container
 
 ```c
 typedef struct {
-    heap_node_t *data; // Contiguous array representing the binary tree
-    size_t size;       // Number of active elements currently in the heap
+    heap_node_t *data; // Contiguous array storing the complete binary tree
+    size_t size;       // Number of active elements currently in the tournament
     size_t capacity;   // Total allocated capacity (equals num_runs)
 } min_heap_t;
 ```
@@ -866,9 +876,9 @@ typedef struct {
   - Parent of `i` is at `(i - 1) / 2`.
   This guarantees perfect CPU cache locality during sift-up and sift-down operations.
 * **Why `size` (`size_t`)?**
-  Tracks how many runs are currently active. Initially, `size = K`. When a run file hits EOF and has no more records to replenish, `size` is decremented by 1. When `size == 0`, the entire dataset has been completely drained.
+  Tracks how many runs are currently active in the tournament. Initially, `size = K`. When a run file hits EOF and has no more records to replenish, `size` is decremented by 1. When `size == 0`, all streams on disk are completely exhausted.
 * **Why `capacity` (`size_t`)?**
-  The maximum number of nodes the heap will ever need to store. Since each of the `K` runs contributes at most 1 active record to the heap at any given moment, `capacity = num_runs`.
+  The maximum number of nodes the heap will ever need to store. Since each of the $K$ runs contributes at most 1 active record to the heap at any given moment, `capacity = num_runs`.
 
 ---
 
@@ -887,7 +897,8 @@ typedef struct external_sorter_t {
     size_t run_paths_capacity;
     
     bool finished_ingestion;   // True after external_sorter_finish() is called
-    min_heap_t heap;           // Priority queue for K-way merge
+    min_heap_t *heap;          // Standalone Priority queue for K-way merge
+    sort_record_t *run_current_records; // Current active record for each spilled run
     size_t in_mem_iter_idx;    // If all records fit in RAM (0 runs spilled), iterator offset
 } external_sorter_t;
 ```
@@ -904,15 +915,16 @@ Let us break down each field by subsystem:
 * **`run_paths` (`char **`):** A dynamically resizable list of heap-allocated file path strings (`["/tmp/run_0000.run", "/tmp/run_0001.run", ...]`).
   - *Why needed?* Phase 1 generates runs sequentially. We need to remember their paths so Phase 2 can open them, and so `external_sorter_destroy()` can delete (`remove()`) every file from disk.
 * **`run_files` (`FILE **`):** An array of open standard I/O file handles (`FILE*`), one for each spilled run.
-  - *Why needed?* During Phase 2, all `K` runs must be read concurrently. `run_files[i]` holds the open stream for run `i` so we can pull the next record on demand without reopening files or seeking.
-* **`num_runs` (`size_t`):** The total number of runs spilled to disk. Also represents the fan-in degree `K` for Phase 2.
+  - *Why needed?* During Phase 2, all $K$ runs must be read concurrently. `run_files[i]` holds the open stream for run `i` so we can pull the next record on demand without reopening files or seeking.
+* **`num_runs` (`size_t`):** The total number of runs spilled to disk. Also represents the fan-in degree $K$ for Phase 2.
 * **`run_paths_capacity` (`size_t`):** The allocation capacity of the `run_paths` and `run_files` dynamic arrays. Grows exponentially (`capacity * 2`) to avoid frequent reallocations if many runs are spilled.
 
 ##### Subsystem C: Execution Coordination & Fast-Path Optimization
 * **`finished_ingestion` (`bool`):** A state machine guard.
   - Protects against calling `external_sorter_push()` after ingestion has been sealed.
   - Protects against calling `external_sorter_next()` before `external_sorter_finish()` has prepared the heap or fast-path state.
-* **`heap` (`min_heap_t`):** Embedded priority queue struct. Directly drives the Phase 2 streaming K-way merge algorithm.
+* **`heap` (`min_heap_t *`):** Pointer to the standalone priority queue. Drives the streaming K-way tournament with zero coupling to file I/O or storage details.
+* **`run_current_records` (`sort_record_t *`):** Dedicated heap array of size $K$. Holds the active record for each open run file, eliminating dangling stack pointers and providing instant $O(1)$ tuple retrieval when a run wins the tournament.
 * **`in_mem_iter_idx` (`size_t`):** The read cursor for the **In-Memory Fast Path**.
   - **Why can't we just use `in_mem_count`? Why do we need a separate iterator index?**
     Think of `in_mem_buf` as a book:
@@ -1718,26 +1730,6 @@ In a dataset of **1 billion rows**, `sift_up` restores global invariant integrit
 
 ---
 
-#### 5. What is `heap_sift_down`? (The Replacement Sinks Down)
-Used during streaming iteration (`external_sorter_next()`):
-
-1. **The Context: A Champion Has Been Crowned**
-   In `external_sorter_next()`, the consumer takes the winner from the root `heap->data[0]` (the absolute minimum key).
-   Now the throne at `data[0]` is vacant!
-2. **The Replacement:**
-   We read the next record from the run file that produced the champion. Say its key is `70`.
-   We place `70` at the root: `heap->data[0].record = next_rec;`.
-3. **The Impostor Problem:**
-   `70` is huge! The children at index 1 and index 2 might have keys `25` and `15`. Placing `70` at the root violently breaks the Min-Heap Invariant ($\text{parent} \le \text{children}$).
-4. **The Sinking Process (Sift Down):**
-   `70` must sink down to its rightful depth:
-   - **The Three-Way Duel:** Compare the current node with its Left Child (`2*idx + 1`) and its Right Child (`2*idx + 2`).
-   - **Why MUST We Swap with the SMALLEST Child?**
-     If Left is `25` and Right is `15`:
-     - If you swap with `25`, then `25` becomes the parent of `15`. But $25 > 15$, which **violates** the min-heap rule!
-     - If you swap with the **smallest child (`15`)**, then `15` becomes the parent of both `25` and `70`. Since $15 \le 25$ and $15 \le 70$, the min-heap rule is **perfectly preserved**!
-   - Repeat the duel until the node is smaller than both its children, or it reaches the bottom of the tree.
-
 #### 5. What is `sift_down`? The Intent: Sinking the Heavy Impostor
 
 What is the fundamental intent of `sift_down`, and when is it invoked?
@@ -2368,7 +2360,152 @@ The standalone priority queue was compiled with strict project flags (`-Wall -We
 5. **Empty State Rejection:** Both `min_heap_pop` and `min_heap_peek` safely returned `false` without memory corruption or segmentation faults.
 6. **In-Place Top Replacement:** Overwriting root `100` with `300` in `{100, 200}` promoted `200` to the throne and sank `300` in a single $O(\log K)$ sift-down pass.
 
+> [!NOTE]
+> **The Stale Test Binary Trap vs. Failed Incremental Builds:**
+> A common question in systems development is: *"Wait, didn't the tests pass a moment ago?"*
+> 1. In `tests/test_db.c`, the external sorter tests (`test_external_sorter_in_memory` and `test_external_sorter_disk_spilling`) were still dormant under `#if 0`. The test suite was only executing Days 1–14 and the standalone `test_min_heap()`.
+> 2. Once `src/external_sort.c` was modified to turn `heap` into a pointer, `make` aborted with compiler errors on `sorter->heap.data`.
+> 3. If a build step fails, running a test runner executes the **old stale binary** produced during the previous successful build! Always check compiler output before verifying test passes.
+
 ---
+
+
+
+### Wiring the Standalone Min-Heap into `external_sort`: 4 Critical Systems Traps
+
+When bridging a standalone priority queue into an external sorter, four subtle systems traps often arise:
+
+#### 1. The Pointer vs. Struct Encapsulation Trap (`.` vs. `->`)
+Because `sorter->heap` is now an owned pointer (`min_heap_t *heap`), accessing fields like `sorter->heap.data` fails at compile time.
+Encapsulation dictates that the sorter should never touch the heap's internal memory layout directly. Instead:
+- In `external_sorter_create`: initialize `sorter->heap = NULL;`.
+- In `external_sorter_finish`: construct the heap with the exact tournament size:
+  ```c
+  sorter->heap = min_heap_create(sorter->num_runs);
+  if (!sorter->heap) return -1;
+  ```
+- In `external_sorter_destroy`: tear down cleanly via `min_heap_destroy(sorter->heap);`.
+
+#### 2. The Empty Heap Seeding Trap (`replace_top` vs. `push`)
+`min_heap_replace_top()` is strictly an optimization for replacing the champion of an **already populated** tournament. If called when `heap->size == 0`, it rejects the operation and returns `false`.
+To seed the tournament with the initial tuple from each of the $K$ run files, you must use:
+```c
+min_heap_push(sorter->heap, key, payload);
+```
+
+#### 3. The Sort Key vs. Stream Identifier Trap
+In `min_heap_push(sorter->heap, key, payload)`:
+- If you pass `i` (the run index `0, 1, 2, ...`) as `key`, you sort the tournament by *file index*! Run 0's items would always win before Run 1's items, completely destroying sorting order.
+- The `key` must be the record's true sorting value: `record.key_value` (or `record.key`).
+
+#### 4. The Escaped Stack Pointer Trap (`(void *)&record`)
+In C, local variables declared inside a loop reside in temporary stack frames.
+If you write:
+```c
+// LETHAL BUG: &record points to local stack memory!
+sort_record_t record;
+fread(&record, sizeof(sort_record_t), 1, fp);
+min_heap_push(sorter->heap, record.key_value, (void *)&record);
+```
+Every heap node points to the exact same temporary stack address! Once `finish()` returns, that stack frame is invalidated, leaving the sorter pointing to corrupted stack garbage.
+
+**The Solution: Persistent Run Records & The `uintptr_t` Scalar-in-Payload Pattern**
+Instead of storing pointers to stack frames, `external_sorter_t` allocates a persistent array:
+```c
+sorter->run_current_records = malloc(sizeof(sort_record_t) * sorter->num_runs);
+```
+During seeding in `external_sorter_finish()`:
+```c
+sorter->run_current_records[i] = record;
+min_heap_push(sorter->heap, record.key_value, (void *)(uintptr_t)i);
+```
+By casting the integer run index `i` directly to `(void *)(uintptr_t)i`:
+1. **Zero Heap Allocations per Node:** No extra heap objects or pointers are needed for payload.
+2. **Zero Dangling Pointers:** The payload is an integer value encoded in pointer bits.
+3. **Instant Lookup:** When a node wins the tournament, `size_t run_idx = (size_t)(uintptr_t)node.payload;`. The sorter retrieves the full record from `sorter->run_current_records[run_idx]` and knows precisely which `run_files[run_idx]` handle to advance!
+
+##### The 4-Stage Lifecycle of `run_current_records`:
+1. **Creation (`external_sorter_create`):** Initialize `sorter->run_current_records = NULL;`.
+2. **Allocation & Seeding (`external_sorter_finish`):**
+   When `sorter->num_runs > 0`:
+   ```c
+   sorter->run_current_records = malloc(sizeof(sort_record_t) * sorter->num_runs);
+   if (!sorter->run_current_records) return -1;
+   ```
+   In the seeding loop, write the initial record:
+   ```c
+   sorter->run_current_records[i] = record;
+   min_heap_push(sorter->heap, record.key_value, (void *)(uintptr_t)i);
+   ```
+3. **Replenishment (`external_sorter_next`):**
+   When advancing run `run_idx`:
+   ```c
+   sorter->run_current_records[run_idx] = next_record;
+   min_heap_replace_top(sorter->heap, next_record.key_value, (void *)(uintptr_t)run_idx);
+   ```
+4. **Teardown (`external_sorter_destroy`):**
+   `free(sorter->run_current_records);` (safe even if `NULL` on in-memory fast paths).
+
+```text
+
+The Dangling Stack Pointer Bug:
++-------------------------------------------------------------------+
+| finish() Stack Frame:                                             |
+|   sort_record_t record; (address: 0x7ffee0)                       |
++-------------------------------------------------------------------+
+       ▲
+       │  (Heap node holds: payload = 0x7ffee0)
++-------------------------------------------------------------------+
+| Heap array in RAM:                                                |
+|   node 0: key=10, payload=0x7ffee0                                |
+|   node 1: key=20, payload=0x7ffee0  <-- ALL NODES POINT HERE!     |
++-------------------------------------------------------------------+
+[finish() returns -> Stack frame destroyed! payload points to garbage!]
+
+The uintptr_t Direct Integer Pattern (min_heap definition never changes):
++-------------------------------------------------------------------+
+| Heap array in RAM:                                                |
+|   node 0: key=10, payload = (void*)(uintptr_t)0   (Run Index 0)   |
+|   node 1: key=20, payload = (void*)(uintptr_t)1   (Run Index 1)   |
++-------------------------------------------------------------------+
+       │                                     │
+       ▼                                     ▼
+ sorter->run_current_records[0]        sorter->run_current_records[1]
+```
+
+#### Systems Deep Dive: Where is `(void *)(uintptr_t)i` Actually Stored?
+
+A common question when first seeing `(void *)(uintptr_t)i` in systems C is:
+> *"Where is this value actually stored? Is it allocated on the heap? Does it need `malloc`?"*
+
+The answer is: **It is stored directly inside the 8 bytes of the `payload` member itself!**
+
+##### What is a Pointer to the CPU?
+At the hardware level (x86_64, ARM64, Apple Silicon), the CPU does not have a separate physical concept called a "pointer".
+A pointer is simply **an 8-byte unsigned integer (a 64-bit integer slot in RAM)**.
+
+```text
++-------------------------------------------------------------+
+|                      heap_node_t (16 bytes)                 |
++------------------------------+------------------------------+
+|       int64_t key            |      void *payload           |
+|       (8 bytes)              |       (8 bytes)              |
+|   0x0000000000000014 (20)    |   0x0000000000000002 (Run 2) |
++------------------------------+------------------------------+
+```
+
+1. **Conventional Pointer Usage (Indirect Reference):**
+   Those 8 bytes store a virtual memory address (e.g. `0x00007ffeefbfc620`). When you write `*ptr`, the CPU uses that address to fetch data from elsewhere in RAM.
+2. **The "Value-in-Pointer" Idiom (Direct Value Embedding):**
+   Instead of storing an address in those 8 bytes, we write the integer `2` directly into that 8-byte memory slot:
+   `0x0000000000000002`!
+   - **No memory allocation (`malloc`) is ever performed.**
+   - **It points to nothing.** We never dereference it with `*`!
+   - When we read it back: `size_t run_idx = (size_t)(uintptr_t)node.payload;`, the CPU simply reads those 8 bytes directly as an integer.
+   - Zero memory leaks, zero cache misses, zero pointer indirection. This is the standard, battle-tested pattern used by Linux `epoll` (`epoll_data_t.u64`), Apple's Grand Central Dispatch, and high-performance analytical databases worldwide.
+
+---
+
 
 
 ### Clean Teardown & Ephemeral Run Cleanup
@@ -2377,7 +2514,7 @@ Unlike `table_flush` which creates permanent files, the external sorter produces
 In `external_sorter_destroy()`:
 1. Close any open `run_files` handles.
 2. Iterate through `run_paths` and unlink/delete every spilled file using `remove(run_paths[i])`.
-3. Free `in_mem_buf`, `heap.data`, `run_paths`, and the `external_sorter_t` struct itself.
+3. Free `in_mem_buf`, `run_current_records`, call `min_heap_destroy(sorter->heap)`, free `run_paths`, and free the `external_sorter_t` struct itself.
 
 Zero file leaks, zero memory leaks.
 
@@ -2393,25 +2530,16 @@ Zero file leaks, zero memory leaks.
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include "simpledb/min_heap.h"
 
-// A sort record / tuple holding a 32-bit integer sort key and a 32-bit row_id
+// A sort record / tuple holding a 32-bit integer sort key value and a 32-bit row_id
 typedef struct {
-    int32_t key;    // The sorting key (e.g. score, timestamp, surrogate id)
-    int32_t row_id; // Late materialization pointer: tuple index in the table
+    union {
+        int32_t key;       // Traditional name: sort key
+        int32_t key_value; // Explicit name: the actual value of the sort key
+    };
+    int32_t row_id;        // Late materialization pointer: tuple index in the table
 } sort_record_t;
-
-// A heap node used during K-way merge
-typedef struct {
-    sort_record_t record;
-    size_t run_idx;
-} heap_node_t;
-
-// Min-heap structure for K-way merge
-typedef struct {
-    heap_node_t *data;
-    size_t size;
-    size_t capacity;
-} min_heap_t;
 
 // External sorter state
 typedef struct external_sorter_t {
@@ -2426,7 +2554,8 @@ typedef struct external_sorter_t {
     size_t run_paths_capacity;
     
     bool finished_ingestion;   // True after external_sorter_finish() is called
-    min_heap_t heap;           // Priority queue for K-way merge
+    min_heap_t *heap;          // Standalone Priority queue for K-way merge
+    sort_record_t *run_current_records; // Current active record for each spilled run
     size_t in_mem_iter_idx;    // If all records fit in RAM (0 runs spilled), iterator offset
 } external_sorter_t;
 
@@ -2519,4 +2648,360 @@ void test_external_sorter_disk_spilling(void) {
     printf("External Sorter Disk-Spilling tests passed!\n");
 }
 ```
+
+#### End-to-End Test Suite Verification
+The complete Day 15 suite was compiled with strict C11 flags (`-Wall -Wextra -Wpedantic -std=c11`) and verified via `ctest`:
+1. **In-Memory Fallback (`test_external_sorter_in_memory`):**
+   Ingested 5 records (`{40, 10, 50, 20, 30}`) into a 20-record sorter. Verified zero disk spill, fast-path `qsort`, and exact ascending streaming order (`10, 20, 30, 40, 50`) followed by clean EOF.
+2. **Disk-Spilling K-Way Merge (`test_external_sorter_disk_spilling`):**
+   Ingested 1,000 reverse-sorted records (`1000 ... 1`) into a 100-record buffer, triggering exactly 10 spilled runs on disk (`run_0000.run` ... `run_0009.run`).
+   Verified tournament seeding, streaming pull iteration via `min_heap_peek` and `min_heap_replace_top`, tournament eviction on file EOFs via `min_heap_pop`, strict monotonicity (`rec.key >= prev_key`), exact total tuple count (1,000 records), and zero memory or file descriptor leaks on teardown.
+
+---
+
+### The Final Listing (Complete C Implementation)
+
+With our unit tests passing across both in-memory fast paths and out-of-core disk spilling merges, here is the complete, production-grade C11 implementation for Day 15.
+
+#### 1. Standalone Min-Heap (`src/min_heap.c`)
+
+```c
+#include "simpledb/min_heap.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdlib.h>
+
+min_heap_t *min_heap_create(size_t capacity) {
+    min_heap_t *heap = malloc(sizeof(*heap));
+    if (!heap) {
+        return NULL;
+    }
+    heap->data = malloc(sizeof(heap_node_t) * capacity);
+    if (!heap->data && capacity > 0) {
+        free(heap);
+        return NULL;
+    }
+    heap->capacity = capacity;
+    heap->size = 0;
+    return heap;
+}
+
+static inline size_t heap_parent(size_t idx) { return (idx - 1) / 2; }
+
+static inline size_t heap_left(size_t idx) { return 2 * idx + 1; }
+
+static inline size_t heap_right(size_t idx) { return 2 * idx + 2; }
+
+void min_heap_destroy(min_heap_t *heap) {
+    free(heap->data);
+    free(heap);
+}
+
+void min_heap_sift_up(min_heap_t *heap, size_t inserted_node_idx) {
+    // keep the min-heap invariant: Parent(Key) <= Children(Key)
+    while (inserted_node_idx > 0) {
+        size_t parent = heap_parent(inserted_node_idx);
+        if (heap->data[inserted_node_idx].key >= heap->data[parent].key)
+            break;
+        // swap the node
+        heap_node_t tmp = heap->data[inserted_node_idx];
+        heap->data[inserted_node_idx] = heap->data[parent];
+        heap->data[parent] = tmp;
+
+        // continue
+        inserted_node_idx = parent;
+    }
+}
+
+void min_heap_sift_down(min_heap_t *heap, size_t removed_node_idx) {
+    // keep the min-heap invariant: Parent(Key) <= Children(Key)
+    while (heap_left(removed_node_idx) < heap->size) {
+        size_t left = heap_left(removed_node_idx);
+        size_t right = heap_right(removed_node_idx);
+        size_t smallest = removed_node_idx;
+
+        if (heap->data[left].key < heap->data[smallest].key) {
+            smallest = left;
+        }
+
+        if (right < heap->size && heap->data[right].key < heap->data[smallest].key) {
+            smallest = right;
+        }
+
+        if (smallest == removed_node_idx) {
+            break;
+        }
+
+        heap_node_t tmp = heap->data[removed_node_idx];
+        heap->data[removed_node_idx] = heap->data[smallest];
+        heap->data[smallest] = tmp;
+
+        // continue
+        removed_node_idx = smallest;
+    }
+}
+
+int min_heap_push(min_heap_t *heap, int64_t key, void *payload) {
+    if (!heap || heap->size >= heap->capacity) {
+        return -1;
+    }
+
+    heap_node_t node = {.payload = payload, .key = key};
+
+    heap->data[heap->size] = node;
+    min_heap_sift_up(heap, heap->size);
+
+    heap->size++;
+
+    return 0;
+}
+
+bool min_heap_peek(const min_heap_t *heap, heap_node_t *out_node) {
+    if (!heap || heap->size == 0 || !out_node) {
+        return false;
+    }
+
+    *out_node = heap->data[0];
+    return true;
+}
+
+bool min_heap_pop(min_heap_t *heap, heap_node_t *out_node) {
+    if (!heap || heap->size == 0 || !out_node) {
+        return false;
+    }
+    *out_node = heap->data[0];
+
+    heap->size--;
+    if (heap->size > 0) {
+        heap->data[0] = heap->data[heap->size];
+        min_heap_sift_down(heap, 0);
+    }
+
+    return true;
+}
+
+bool min_heap_replace_top(min_heap_t *heap, int64_t key, void *payload) {
+    if (!heap || heap->size == 0) {
+        return false;
+    }
+    heap_node_t node = {.payload = payload, .key = key};
+    heap->data[0] = node;
+    min_heap_sift_down(heap, 0);
+    return true;
+}
+```
+
+#### 2. External Merge Sort Engine (`src/external_sort.c`)
+
+```c
+#include "simpledb/external_sort.h"
+#include "simpledb/min_heap.h"
+#include <_string.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+external_sorter_t *external_sorter_create(const char *temp_dir, size_t mem_limit_records) {
+    external_sorter_t *sorter = malloc(sizeof(*sorter));
+
+    if (!sorter) {
+        fprintf(stderr,
+                "[FATAL ERROR] external_sorter_create failed to allocate external_sorter_t\n");
+        exit(EXIT_FAILURE);
+    }
+
+    sorter->mem_limit_records = mem_limit_records;
+    sorter->finished_ingestion = false;
+    sorter->in_mem_buf = malloc(mem_limit_records * sizeof(*sorter->in_mem_buf));
+    if (!sorter->in_mem_buf) {
+        free(sorter);
+        fprintf(stderr, "[FATAL ERROR] in_mem_buf failed to allocate in_mem_buf\n");
+        exit(EXIT_FAILURE);
+    }
+    sorter->in_mem_count = 0;
+    sorter->num_runs = 0;
+    sorter->run_paths = NULL;
+    sorter->run_files = NULL;
+    sorter->run_paths_capacity = 0;
+    sorter->in_mem_iter_idx = 0;
+    sorter->run_current_records = NULL;
+    sorter->heap = NULL;
+    snprintf(sorter->temp_dir, sizeof(sorter->temp_dir), "%s", temp_dir);
+
+    return sorter;
+}
+
+void external_sorter_destroy(external_sorter_t *sorter) {
+    if (!sorter)
+        return;
+
+    if (sorter->run_files) {
+        for (size_t i = 0; i < sorter->num_runs; i++) {
+            if (sorter->run_files[i]) {
+                fclose(sorter->run_files[i]);
+            }
+        }
+        free(sorter->run_files);
+    }
+
+    for (size_t i = 0; i < sorter->num_runs; i++) {
+        char *path = sorter->run_paths[i];
+        remove(path);
+        free(sorter->run_paths[i]);
+    }
+    free(sorter->run_paths);
+    free(sorter->run_current_records);
+
+    if (sorter->heap) {
+        min_heap_destroy(sorter->heap);
+    }
+    free(sorter->in_mem_buf);
+    free(sorter);
+}
+
+static int sort_fn(const void *a, const void *b) {
+    const sort_record_t *ra = (const sort_record_t *)a;
+    const sort_record_t *rb = (const sort_record_t *)b;
+    if (ra->key_value < rb->key_value)
+        return -1;
+    if (ra->key_value > rb->key_value)
+        return 1;
+    return 0;
+}
+
+static int spill_run(external_sorter_t *sorter) {
+    if (sorter->in_mem_count == 0)
+        return 0;
+    // sort it with qsort
+    qsort(sorter->in_mem_buf, sorter->in_mem_count, sizeof(sort_record_t), sort_fn);
+    // serialize to file
+    if (sorter->run_paths_capacity <= sorter->num_runs) {
+        // resize
+        size_t new_cap = (sorter->run_paths_capacity == 0) ? 8 : sorter->run_paths_capacity * 2;
+        sorter->run_paths = realloc(sorter->run_paths, sizeof(char *) * new_cap);
+        if (!sorter->run_paths) {
+            return -1;
+        }
+        sorter->run_paths_capacity = new_cap;
+    }
+
+    char path[256];
+    snprintf(path, sizeof(path), "%s/run_%04zu.run", sorter->temp_dir, sorter->num_runs);
+    FILE *fp = fopen(path, "wb");
+    if (!fp) {
+        return -1;
+    }
+    size_t written = fwrite(sorter->in_mem_buf, sizeof(sort_record_t), sorter->in_mem_count, fp);
+    fclose(fp);
+    if (written != sorter->in_mem_count) {
+        remove(path); // Delete the corrupt, partial file
+        return -1;    // Propagate failure to caller
+    }
+    sorter->run_paths[sorter->num_runs++] = strdup(path);
+
+    // reset
+    sorter->in_mem_count = 0;
+    return 0;
+}
+
+int external_sorter_push(external_sorter_t *sorter, const sort_record_t *records, size_t count) {
+    if (!sorter || (!records && count > 0) || sorter->finished_ingestion) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        sorter->in_mem_buf[sorter->in_mem_count++] = records[i];
+        if (sorter->in_mem_count == sorter->mem_limit_records) {
+            if (spill_run(sorter) != 0)
+                return -1;
+        }
+    }
+
+    return 0;
+}
+
+int external_sorter_finish(external_sorter_t *sorter) {
+    if (!sorter || sorter->finished_ingestion)
+        return -1;
+
+    // process last chunk
+    if (sorter->num_runs > 0) {
+        // store the current run in a file
+        spill_run(sorter);
+        // setup the heap
+        sorter->heap = min_heap_create(sorter->num_runs);
+        if (!sorter->heap)
+            return -1;
+
+        // prepare the files to be iterated
+        sorter->run_files = malloc(sizeof(FILE *) * sorter->num_runs);
+        if (!sorter->run_files)
+            return -1;
+
+        sorter->run_current_records = malloc(sizeof(sort_record_t) * sorter->num_runs);
+        if (!sorter->run_current_records)
+            return -1;
+
+        for (size_t i = 0; i < sorter->num_runs; i++) {
+            sorter->run_files[i] = fopen(sorter->run_paths[i], "rb");
+            if (!sorter->run_files[i])
+                return -1;
+
+            // push first element into the heap
+            sort_record_t record;
+            if (fread(&record, sizeof(sort_record_t), 1, sorter->run_files[i]) != 1)
+                return -1;
+
+            sorter->run_current_records[i] = record;
+            min_heap_push(sorter->heap, record.key_value, (void *)(uintptr_t)i);
+        }
+
+    } else {
+        // everything fits in memory, so sort it!
+        qsort(sorter->in_mem_buf, sorter->in_mem_count, sizeof(sort_record_t), sort_fn);
+    }
+
+    sorter->in_mem_iter_idx = 0;
+    sorter->finished_ingestion = true;
+    return 0;
+}
+
+// read path
+bool external_sorter_next(external_sorter_t *sorter, sort_record_t *out_record) {
+    if (!sorter || !out_record || !sorter->finished_ingestion) {
+        return false;
+    }
+
+    if (sorter->num_runs > 0) {
+        heap_node_t top;
+        // If heap is empty, all runs on disk reached EOF -> stream is done!
+        if (!min_heap_peek(sorter->heap, &top)) {
+            return false;
+        }
+
+        size_t run_idx = (size_t)(uintptr_t)top.payload;
+        *out_record = sorter->run_current_records[run_idx];
+
+        sort_record_t record;
+        if (fread(&record, sizeof(sort_record_t), 1, sorter->run_files[run_idx]) == 1) {
+            sorter->run_current_records[run_idx] = record;
+            min_heap_replace_top(sorter->heap, record.key_value, (void *)(uintptr_t)run_idx);
+        } else {
+            min_heap_pop(sorter->heap, &top);
+        }
+        return true;
+    } else {
+        if (sorter->in_mem_iter_idx < sorter->in_mem_count) {
+            *out_record = sorter->in_mem_buf[sorter->in_mem_iter_idx++];
+            return true;
+        }
+        return false;
+    }
+}
+```
+
+
 

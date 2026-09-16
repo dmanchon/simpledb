@@ -13,7 +13,7 @@
 #include "simpledb/table.h"
 #include "simpledb/tokenizer.h"
 #include "simpledb/deletion_vector.h"
-#include "simpledb/min_heap.h"
+#include "simpledb/external_sort.h"
 #include <time.h>
 #include <assert.h>
 #include <stdint.h>
@@ -788,7 +788,6 @@ void test_deletion_vector(void) {
     printf("Deletion Vector tests passed!\n");
 }
 
-#if 0
 static void test_external_sorter_in_memory(void) {
     printf("Testing External Sorter (In-Memory Fallback)...\n");
 
@@ -853,7 +852,6 @@ static void test_external_sorter_disk_spilling(void) {
     external_sorter_destroy(sorter);
     printf("External Sorter Disk-Spilling tests passed!\n");
 }
-#endif
 
 static void test_min_heap(void) {
     printf("Testing Standalone Min-Heap Priority Queue (Key + Payload)...\n");
@@ -932,9 +930,8 @@ int main(void) {
     test_table_flush_e2e();
     test_deletion_vector();
     test_min_heap();
-    // Day 15 External Sorter tests (deferred until Day 15):
-    // test_external_sorter_in_memory();
-    // test_external_sorter_disk_spilling();
+    test_external_sorter_in_memory();
+    test_external_sorter_disk_spilling();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

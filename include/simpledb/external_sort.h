@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include "simpledb/min_heap.h"
 
 // A sort record / tuple holding a 32-bit integer sort key value and a 32-bit row_id
 typedef struct {
@@ -13,19 +14,6 @@ typedef struct {
     };
     int32_t row_id;        // Late materialization pointer: tuple index in the table
 } sort_record_t;
-
-// A heap node used during K-way merge
-typedef struct {
-    sort_record_t record;
-    size_t run_idx;
-} heap_node_t;
-
-// Min-heap structure for K-way merge
-typedef struct {
-    heap_node_t *data;
-    size_t size;
-    size_t capacity;
-} min_heap_t;
 
 // External sorter state
 typedef struct external_sorter_t {
@@ -40,7 +28,8 @@ typedef struct external_sorter_t {
     size_t run_paths_capacity;
 
     bool finished_ingestion;   // True after external_sorter_finish() is called
-    min_heap_t heap;           // Priority queue for K-way merge
+    min_heap_t *heap;          // Priority queue for K-way merge
+    sort_record_t *run_current_records; // Current active record for each spilled run
     size_t in_mem_iter_idx;    // If all records fit in RAM (0 runs spilled), iterator offset
 } external_sorter_t;
 

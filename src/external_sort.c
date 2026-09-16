@@ -1,5 +1,7 @@
 #include "simpledb/external_sort.h"
+#include "simpledb/min_heap.h"
 #include <_string.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -29,7 +31,8 @@ external_sorter_t *external_sorter_create(const char *temp_dir, size_t mem_limit
     sorter->run_files = NULL;
     sorter->run_paths_capacity = 0;
     sorter->in_mem_iter_idx = 0;
-    sorter->heap = (min_heap_t){0};
+    sorter->run_current_records = NULL;
+    sorter->heap = NULL;
     snprintf(sorter->temp_dir, sizeof(sorter->temp_dir), "%s", temp_dir);
 
     return sorter;
@@ -54,8 +57,11 @@ void external_sorter_destroy(external_sorter_t *sorter) {
         free(sorter->run_paths[i]);
     }
     free(sorter->run_paths);
-    free(sorter->heap.data);
+    free(sorter->run_current_records);
 
+    if (sorter->heap) {
+        min_heap_destroy(sorter->heap);
+    }
     free(sorter->in_mem_buf);
     free(sorter);
 }
@@ -121,52 +127,6 @@ int external_sorter_push(external_sorter_t *sorter, const sort_record_t *records
     return 0;
 }
 
-static void heap_sift_up(min_heap_t *heap, size_t idx) {
-    while (idx > 0) {
-        size_t parent = (idx - 1) / 2;
-        if (heap->data[idx].record.key_value < heap->data[parent].record.key_value) {
-            heap_node_t tmp = heap->data[idx];
-            heap->data[idx] = heap->data[parent];
-            heap->data[parent] = tmp;
-            idx = parent;
-        } else {
-            break;
-        }
-    }
-}
-
-static void heap_sift_down(min_heap_t *heap, size_t idx) {
-    size_t size = heap->size;
-    // As long as idx has at least a left child:
-    while (2 * idx + 1 < size) {
-        size_t left = 2 * idx + 1;
-        size_t right = 2 * idx + 2;
-        size_t smallest = idx;
-
-        // Check if Left child is smaller
-        if (left < size &&
-            heap->data[left].record.key_value < heap->data[smallest].record.key_value) {
-            smallest = left;
-        }
-        // Check if Right child is even smaller
-        if (right < size &&
-            heap->data[right].record.key_value < heap->data[smallest].record.key_value) {
-            smallest = right;
-        }
-
-        // If a child is smaller than parent, swap and continue sinking
-        if (smallest != idx) {
-            heap_node_t tmp = heap->data[idx];
-            heap->data[idx] = heap->data[smallest];
-            heap->data[smallest] = tmp;
-            idx = smallest; // Follow the sinking node
-        } else {
-            // Both children are >= current node. It's in the right spot!
-            break;
-        }
-    }
-}
-
 int external_sorter_finish(external_sorter_t *sorter) {
     if (!sorter || sorter->finished_ingestion)
         return -1;
@@ -176,15 +136,17 @@ int external_sorter_finish(external_sorter_t *sorter) {
         // store the current run in a file
         spill_run(sorter);
         // setup the heap
-        sorter->heap.data = malloc(sizeof(heap_node_t) * sorter->num_runs);
-        if (!sorter->heap.data)
+        sorter->heap = min_heap_create(sorter->num_runs);
+        if (!sorter->heap)
             return -1;
-        sorter->heap.capacity = sorter->num_runs;
-        sorter->heap.size = 0;
 
         // prepare the files to be iterated
         sorter->run_files = malloc(sizeof(FILE *) * sorter->num_runs);
         if (!sorter->run_files)
+            return -1;
+
+        sorter->run_current_records = malloc(sizeof(sort_record_t) * sorter->num_runs);
+        if (!sorter->run_current_records)
             return -1;
 
         for (size_t i = 0; i < sorter->num_runs; i++) {
@@ -196,9 +158,9 @@ int external_sorter_finish(external_sorter_t *sorter) {
             sort_record_t record;
             if (fread(&record, sizeof(sort_record_t), 1, sorter->run_files[i]) != 1)
                 return -1;
-            heap_node_t node = {.record = record, .run_idx = i};
-            sorter->heap.data[sorter->heap.size++] = node;
-            heap_sift_up(&sorter->heap, sorter->heap.size - 1);
+
+            sorter->run_current_records[i] = record;
+            min_heap_push(sorter->heap, record.key_value, (void *)(uintptr_t)i);
         }
 
     } else {
@@ -213,5 +175,33 @@ int external_sorter_finish(external_sorter_t *sorter) {
 
 // read path
 bool external_sorter_next(external_sorter_t *sorter, sort_record_t *out_record) {
-    return 0;
+    if (!sorter || !out_record || !sorter->finished_ingestion) {
+        return false;
+    }
+
+    if (sorter->num_runs > 0) {
+        heap_node_t top;
+        // If heap is empty, all runs on disk reached EOF -> stream is done!
+        if (!min_heap_peek(sorter->heap, &top)) {
+            return false;
+        }
+
+        size_t run_idx = (size_t)(uintptr_t)top.payload;
+        *out_record = sorter->run_current_records[run_idx];
+
+        sort_record_t record;
+        if (fread(&record, sizeof(sort_record_t), 1, sorter->run_files[run_idx]) == 1) {
+            sorter->run_current_records[run_idx] = record;
+            min_heap_replace_top(sorter->heap, record.key_value, (void *)(uintptr_t)run_idx);
+        } else {
+            min_heap_pop(sorter->heap, &top);
+        }
+        return true;
+    } else {
+        if (sorter->in_mem_iter_idx < sorter->in_mem_count) {
+            *out_record = sorter->in_mem_buf[sorter->in_mem_iter_idx++];
+            return true;
+        }
+        return false;
+    }
 }

@@ -427,12 +427,12 @@ If runs were spilled to disk during ingestion:
        min_heap_push(sorter->heap, rec.key_value, (void *)(uintptr_t)i);
    }
    ```
-   The initial $K$ candidates are loaded into the tournament bracket. Set `sorter->finished_ingestion = true;` and return `0`.
+   The initial K candidates are loaded into the tournament bracket. Set `sorter->finished_ingestion = true;` and return `0`.
 
    > [!WARNING]
    > **Traps in the Tournament Seeding Loop:**
    > 1. **The `fread` Inverted Return Value Trap:** `fread(ptr, size, count, stream)` returns the **number of items read**, NOT an error code (0). When reading 1 item, a successful read returns `1`! If you write `if (fread(...) != 0) return -1;`, `1 != 0` evaluates to true, causing the function to abort with an error on **success**! Always check `if (fread(...) != 1) return -1;`.
-   > 2. **The Escaped Stack Variable Trap (`(void *)&rec`):** Passing the address of local stack variable `&rec` into `payload` creates a dangling pointer: on the next loop iteration, that stack memory is overwritten, corrupting all runs! Instead, we allocate a heap array `sorter->run_current_records` of size $K$, store the tuple there, and pass the run index directly as a scalar payload: `(void *)(uintptr_t)i`.
+   > 2. **The Escaped Stack Variable Trap (`(void *)&rec`):** Passing the address of local stack variable `&rec` into `payload` creates a dangling pointer: on the next loop iteration, that stack memory is overwritten, corrupting all runs! Instead, we allocate a heap array `sorter->run_current_records` of size K, store the tuple there, and pass the run index directly as a scalar payload: `(void *)(uintptr_t)i`.
    > 3. **Encapsulated Heap Invariant:** By calling `min_heap_push()`, `min_heap_sift_up` is executed automatically inside the standalone priority queue module, keeping `external_sort.c` completely decoupled from array navigation details.
 
 
@@ -473,14 +473,14 @@ Run 2 File: [ 7, 10, 25, 50 ] ──► (Read top card: 7) ──┘
 
 ##### What the Computer Physically Does in C (Bytes & File Pointers)
 Now translate that card table directly to the operating system and CPU:
-1. **Each "deck" is a `.run` file on disk.** In Phase 1, we wrote $K$ files (`run_0000.run`, `run_0001.run`, ...). Each file contains millions of records, already sorted.
+1. **Each "deck" is a `.run` file on disk.** In Phase 1, we wrote K files (`run_0000.run`, `run_0001.run`, ...). Each file contains millions of records, already sorted.
 2. **Open K Handles (`run_files[i] = fopen(...)`):**
-   The operating system gives us $K$ open file pointers. Each file's read cursor starts parked at byte 0 (the top of the deck).
+   The operating system gives us K open file pointers. Each file's read cursor starts parked at byte 0 (the top of the deck).
 3. **Read Exactly 1 Tuple From Each (`fread(..., 1, fp)`):**
    We do **not** load the files into RAM! We tell the OS: *"Read exactly ONE 8-byte `sort_record_t` from file 0, ONE from file 1, ..., ONE from file K-1."*
    If we have 10 runs, our RAM holds **only 10 tuples (80 bytes)**!
 4. **"Seed the Min-Heap" (Enter Candidates into the Tournament Bracket):**
-   "Seeding" means loading those $K$ initial records into our priority queue:
+   "Seeding" means loading those K initial records into our priority queue:
    ```c
    // 1. Cache the full record in the sorter's persistent buffer:
    sorter->run_current_records[i] = rec;
@@ -490,7 +490,7 @@ Now translate that card table directly to the operating system and CPU:
    //    - payload: run index encoded directly in the pointer slot: (void *)(uintptr_t)i
    min_heap_push(sorter->heap, rec.key_value, (void *)(uintptr_t)i);
    ```
-   The binary min-heap organizes these $K$ contestants in $O(K \log K)$ time so that `min_heap_peek(sorter->heap, &top)` is guaranteed to yield the overall minimum element across all runs.
+   The binary min-heap organizes these K contestants in O(K log K) time so that `min_heap_peek(sorter->heap, &top)` is guaranteed to yield the overall minimum element across all runs.
    The tournament is now ready to stream!
 
 #### Step 5: Streaming Pull Iteration (`external_sorter_next`)
@@ -521,7 +521,7 @@ if (sorter->num_runs == 0) {
     return false; // All in-memory records exhausted (EOF)
 }
 ```
-Pure $O(1)$ memory copies with 100% cache-line throughput!
+Pure O(1) memory copies with 100% cache-line throughput!
 
 ##### 3. Branch B — The Spilled Merge Path (`sorter->num_runs > 0`):
 The records stream through the K-Way Min-Heap tournament using our encapsulated priority queue API:
@@ -558,16 +558,16 @@ The records stream through the K-Way Min-Heap tournament using our encapsulated 
    return true;
    ```
 
-Zero disk seeking, bounded RAM, single $O(\log K)$ step per tuple.
+Zero disk seeking, bounded RAM, single O(log K) step per tuple.
 
 > [!WARNING]
 > **The Premature Tournament Abort Trap: `fread != 1` is EOF, NOT an Error!**
 > A natural reflex when checking `fread` is to write `if (fread(...) != 1) return -1;`.
 > While a failed read during initial seeding in `finish()` indicates file corruption (since every spilled run contains at least one tuple), in `external_sorter_next()` `fread != 1` simply signals **End of File (EOF)** for that specific run!
-> If you return `-1` (or `false`) when one run runs out of cards, the sorter terminates prematurely, throwing away all the remaining tuples in the other $K-1$ run files!
+> If you return `-1` (or `false`) when one run runs out of cards, the sorter terminates prematurely, throwing away all the remaining tuples in the other K - 1 run files!
 > Instead:
 > 1. That run is now exhausted.
-> 2. Evict it from the tournament: `min_heap_pop(sorter->heap, &top);` (shrinking the active tournament from $K$ to $K-1$).
+> 2. Evict it from the tournament: `min_heap_pop(sorter->heap, &top);` (shrinking the active tournament from K to K - 1).
 > 3. Return `true`, because the champion was already copied to `*out_record`!
 
 > [!CAUTION]
@@ -575,7 +575,7 @@ Zero disk seeking, bounded RAM, single $O(\log K)$ step per tuple.
 > 1. **The In-Memory Count-Increment Trap (`in_mem_count++`):**
 >    Writing `*out_record = sorter->in_mem_buf[sorter->in_mem_count++];` is a lethal bug:
 >    - `in_mem_count` is the **total number of elements** in the buffer.
->    - Indexing at `in_mem_count` starts reading out of bounds from element $N$, and increments to $N+1, N+2, \dots$ forever without ever returning `false`!
+>    - Indexing at `in_mem_count` starts reading out of bounds from element N, and increments to N+1, N+2, ... forever without ever returning `false`!
 >    - Always use the dedicated iterator offset `in_mem_iter_idx`:
 >      ```c
 >      if (sorter->in_mem_iter_idx < sorter->in_mem_count) {
@@ -761,7 +761,7 @@ Because in real analytical workloads, **data frequently needs to be sorted in wa
 A table can only have **one physical ordering on disk**.
 If your table is physically sorted by `timestamp`:
 * `Part 0 timestamps:` `[ 10:01, 10:02, 10:03 ]` *(Sorted)*
-* `Part 0 user_salary:` `[ $150,000, $40,000, $95,000 ]` *(Completely Random!)*
+* `Part 0 user_salary:` `[ 150000, 40000, 95000 ]` *(Completely Random!)*
 
 What happens if an analyst runs:
 ```sql
@@ -848,7 +848,7 @@ typedef struct {
   By making `key` a primitive 64-bit integer, comparisons are executed with a **single CPU instruction (`CMP` / `B.LT`)**. There are **zero indirect function pointer calls**, zero branch mispredictions, and full compiler auto-vectorization!
 * **Why `payload` (`void *`)?**
   **This is the key to decoupling.**
-  In Phase 2, when the heap crowns the minimum tuple, the engine needs to know: *from which of the $K$ run files did this tuple originate?*
+  In Phase 2, when the heap crowns the minimum tuple, the engine needs to know: *from which of the K run files did this tuple originate?*
   Instead of hardcoding external sorter structs into the heap, `payload` provides a universal 8-byte opaque slot:
   - In `external_sort`, we encode the run index directly: `(void *)(uintptr_t)run_idx`.
   - Zero dynamic memory allocations, zero pointer dereferences, and zero dangling pointers.
@@ -878,7 +878,7 @@ typedef struct {
 * **Why `size` (`size_t`)?**
   Tracks how many runs are currently active in the tournament. Initially, `size = K`. When a run file hits EOF and has no more records to replenish, `size` is decremented by 1. When `size == 0`, all streams on disk are completely exhausted.
 * **Why `capacity` (`size_t`)?**
-  The maximum number of nodes the heap will ever need to store. Since each of the $K$ runs contributes at most 1 active record to the heap at any given moment, `capacity = num_runs`.
+  The maximum number of nodes the heap will ever need to store. Since each of the K runs contributes at most 1 active record to the heap at any given moment, `capacity = num_runs`.
 
 ---
 
@@ -915,8 +915,8 @@ Let us break down each field by subsystem:
 * **`run_paths` (`char **`):** A dynamically resizable list of heap-allocated file path strings (`["/tmp/run_0000.run", "/tmp/run_0001.run", ...]`).
   - *Why needed?* Phase 1 generates runs sequentially. We need to remember their paths so Phase 2 can open them, and so `external_sorter_destroy()` can delete (`remove()`) every file from disk.
 * **`run_files` (`FILE **`):** An array of open standard I/O file handles (`FILE*`), one for each spilled run.
-  - *Why needed?* During Phase 2, all $K$ runs must be read concurrently. `run_files[i]` holds the open stream for run `i` so we can pull the next record on demand without reopening files or seeking.
-* **`num_runs` (`size_t`):** The total number of runs spilled to disk. Also represents the fan-in degree $K$ for Phase 2.
+  - *Why needed?* During Phase 2, all K runs must be read concurrently. `run_files[i]` holds the open stream for run `i` so we can pull the next record on demand without reopening files or seeking.
+* **`num_runs` (`size_t`):** The total number of runs spilled to disk. Also represents the fan-in degree K for Phase 2.
 * **`run_paths_capacity` (`size_t`):** The allocation capacity of the `run_paths` and `run_files` dynamic arrays. Grows exponentially (`capacity * 2`) to avoid frequent reallocations if many runs are spilled.
 
 ##### Subsystem C: Execution Coordination & Fast-Path Optimization
@@ -924,7 +924,7 @@ Let us break down each field by subsystem:
   - Protects against calling `external_sorter_push()` after ingestion has been sealed.
   - Protects against calling `external_sorter_next()` before `external_sorter_finish()` has prepared the heap or fast-path state.
 * **`heap` (`min_heap_t *`):** Pointer to the standalone priority queue. Drives the streaming K-way tournament with zero coupling to file I/O or storage details.
-* **`run_current_records` (`sort_record_t *`):** Dedicated heap array of size $K$. Holds the active record for each open run file, eliminating dangling stack pointers and providing instant $O(1)$ tuple retrieval when a run wins the tournament.
+* **`run_current_records` (`sort_record_t *`):** Dedicated heap array of size K. Holds the active record for each open run file, eliminating dangling stack pointers and providing instant O(1) tuple retrieval when a run wins the tournament.
 * **`in_mem_iter_idx` (`size_t`):** The read cursor for the **In-Memory Fast Path**.
   - **Why can't we just use `in_mem_count`? Why do we need a separate iterator index?**
     Think of `in_mem_buf` as a book:
@@ -1192,8 +1192,10 @@ How does the Day 15 sorting engine in `simpledb` compare to industry-standard an
 
 #### 1. What is a Heap (Priority Queue)?
 A **Binary Min-Heap** is a specialized, complete binary tree data structure that satisfies the **Min-Heap Invariant**:
-> **For every node $i$: The value of the parent is always less than or equal to the values of its children.**
-> $$\text{Value}(\text{parent}) \le \text{Value}(\text{child})$$
+> **For every node `i`: The value of the parent is always less than or equal to the values of its children.**
+> ```text
+> Value(parent) <= Value(child)
+> ```
 
 Because every parent is smaller than its children, **the absolute smallest element in the entire data structure is GUARANTEED to sit at the root node (index 0)**.
 
@@ -1205,21 +1207,25 @@ Because every parent is smaller than its children, **the absolute smallest eleme
         40   60  30   18
 ```
 
-Notice that a heap is **not fully sorted**. Node 25 is on the left, node 15 is on the right; 40 is greater than 18. A heap only guarantees vertical dominance (parent $\le$ child), not horizontal order. This partial ordering is why heaps are so blazingly fast: maintaining partial order takes only $O(\log K)$ time, whereas keeping an array fully sorted takes $O(K)$ time!
+Notice that a heap is **not fully sorted**. Node 25 is on the left, node 15 is on the right; 40 is greater than 18. A heap only guarantees vertical dominance (parent <= child), not horizontal order. This partial ordering is why heaps are so blazingly fast: maintaining partial order takes only O(log K) time, whereas keeping an array fully sorted takes O(K) time!
 
 #### 2. The K-Way Merge Dilemma: Why Heaps Crush Linear Scans
-During Phase 2, we have $K$ sorted run files on disk. We hold 1 candidate record from each of the $K$ runs.
-To emit $N$ sorted records in total:
-* **Naive Linear Scan ($O(K)$ per tuple):**
-  Scan all $K$ candidates linearly to find the smallest one.
-  Total CPU comparisons: $N \times K$.
-  If $K = 1,000$ runs and $N = 100,000,000$ records:
-  $$100,000,000 \times 1,000 = 100,000,000,000 \text{ comparisons! (100 Billion!)}$$
-* **Binary Min-Heap ($O(\log K)$ per tuple):**
-  The minimum is instantly available at the root in **$O(1)$** time.
-  When replaced by the next tuple from that run, restoring the heap takes $\log_2(K)$ steps.
-  If $K = 1,000$ runs: $\log_2(1,000) \approx 10$ comparisons.
-  $$100,000,000 \times 10 = 1,000,000,000 \text{ comparisons! (100x faster!)}$$
+During Phase 2, we have K sorted run files on disk. We hold 1 candidate record from each of the K runs.
+To emit N sorted records in total:
+* **Naive Linear Scan (O(K) per tuple):**
+  Scan all K candidates linearly to find the smallest one.
+  Total CPU comparisons: `N * K`.
+  If K = 1,000 runs and N = 100,000,000 records:
+  ```text
+  100,000,000 * 1,000 = 100,000,000,000 comparisons (100 Billion!)
+  ```
+* **Binary Min-Heap (O(log K) per tuple):**
+  The minimum is instantly available at the root in **O(1)** time.
+  When replaced by the next tuple from that run, restoring the heap takes `log2(K)` steps.
+  If K = 1,000 runs: `log2(1,000) ~ 10` comparisons.
+  ```text
+  100,000,000 * 10 = 1,000,000,000 comparisons (100x faster!)
+  ```
 
 #### 3. Deep Systems Dive: Implicit Data Structures, Flat Arrays & Pointer Arithmetic
 
@@ -1312,10 +1318,12 @@ Level d:        2^d nodes          Index (2^d - 1)           Index (2^(d+1) - 2)
 ```
 
 Notice the beautiful mathematical summation:
-The starting index of any level $d$ is the sum of all nodes in preceding levels:
-$$\text{Start}(d) = \sum_{j=0}^{d-1} 2^j = 2^d - 1$$
+The starting index of any level `d` is the sum of all nodes in preceding levels:
+```text
+Start(d) = 2^0 + 2^1 + ... + 2^(d-1) = 2^d - 1
+```
 
-Because a heap enforces the **Complete Tree Invariant** (all levels are 100% packed, and the leaf level is filled from left to right), the $N$ active nodes map to **consecutive indices $0, 1, 2, \dots, N-1$ with ZERO memory gaps**.
+Because a heap enforces the **Complete Tree Invariant** (all levels are 100% packed, and the leaf level is filled from left to right), the N active nodes map to **consecutive indices 0, 1, 2, ..., N-1 with ZERO memory gaps**.
 
 ---
 
@@ -1335,9 +1343,11 @@ Why is this pattern problematic in an array-backed implicit data structure?
 ###### 1. The Lost Context Problem (C Pointers Carry No Metadata)
 In C, a raw pointer `heap_node_t *n` is simply a 64-bit integer representing a virtual memory address (e.g. `0x7ffee1234050`).
 It has **no idea what its index is**, nor does it know where the array base `heap->data` begins or where `heap->size` ends:
-- To calculate the parent index $\frac{i - 1}{2}$, you must first determine the current index $i$.
-- But to find $i$ from a pointer, you must perform pointer subtraction against the base:
-  $$\text{idx} = n - \text{heap->data}$$
+- To calculate the parent index `(i - 1) / 2`, you must first determine the current index `i`.
+- But to find `i` from a pointer, you must perform pointer subtraction against the base:
+  ```text
+  idx = n - heap->data
+  ```
 - Therefore, a pointer helper cannot even work without passing the `heap` object:
   ```c
   static heap_node_t* get_parent(min_heap_t *heap, heap_node_t *node) {
@@ -1352,7 +1362,7 @@ Notice what the above function does under the hood:
 1. `node - heap->data` performs address subtraction and integer division by 16 (`sizeof(heap_node_t)`).
 2. Computes the parent index `(idx - 1) / 2`.
 3. Multiplies the parent index by 16 and adds it to `heap->data` to return a pointer.
-Converting from **pointer $\to$ index $\to$ parent index $\to$ pointer** adds cognitive noise and unnecessary arithmetic compared to simply staying in index-space!
+Converting from **pointer -> index -> parent index -> pointer** adds cognitive noise and unnecessary arithmetic compared to simply staying in index-space!
 
 ###### 3. The Swap Invalidation Trap
 When two nodes swap in an array:
@@ -1431,19 +1441,21 @@ Why does this implicit array mapping run circles around pointer-based trees on m
 
 3. **The Sibling Cache-Line Miracle:**
    Look at the formulas for children:
-   - $\text{Left}(i) = 2i + 1$
-   - $\text{Right}(i) = 2i + 2$
+   - `Left(i) = 2*i + 1`
+   - `Right(i) = 2*i + 2`
    Notice that:
-   $$\text{Right}(i) = \text{Left}(i) + 1$$
+   ```text
+   Right(i) = Left(i) + 1
+   ```
    **The left and right children are physically adjacent memory neighbors!**
    - In our engine, `heap_node_t` is 16 bytes (8-byte `sort_record_t` + 8-byte `run_idx`).
-   - A CPU cache line is 64 bytes. Exactly $64 / 16 = 4$ heap nodes fit inside a single cache line.
+   - A CPU cache line is 64 bytes. Exactly 64 / 16 = 4 heap nodes fit inside a single cache line.
    - When `heap_sift_down` reads the left child, the CPU cache controller automatically fetches the surrounding 64 bytes. **The right child is already sitting in L1 cache before the CPU even asks for it!**
    Evaluating both children in the three-way duel costs **zero extra memory fetches**.
 
 4. **Multi-Way / 4-Ary Heaps (Matching Cache Lines Perfectly):**
-   This mechanical sympathy explains why modern database kernels often use **4-ary heaps** ($D = 4$):
-   - In a 4-ary heap, a node has 4 children at indices $4i + 1, 4i + 2, 4i + 3, 4i + 4$.
+   This mechanical sympathy explains why modern database kernels often use **4-ary heaps** (D = 4):
+   - In a 4-ary heap, a node has 4 children at indices `4*i + 1, 4*i + 2, 4*i + 3, 4*i + 4`.
    - Four 16-byte nodes = **exactly 64 bytes (one full cache line)**!
    - The CPU reads all 4 children in a single cache-line transaction and compares them simultaneously using SIMD vector instructions (`_mm256_cmpgt_epi32`).
 
@@ -1465,23 +1477,27 @@ Why does this implicit array mapping run circles around pointer-based trees on m
 > ```
 >
 > Look at the binary bits:
-> * Moving to the **Left Child**: Append a `0` bit $\implies k \times 2$ (or `k << 1`).
-> * Moving to the **Right Child**: Append a `1` bit $\implies k \times 2 + 1$ (or `(k << 1) | 1`).
+> * Moving to the **Left Child**: Append a `0` bit --> `k * 2` (or `k << 1`).
+> * Moving to the **Right Child**: Append a `1` bit --> `k * 2 + 1` (or `(k << 1) | 1`).
 > * Moving to the **Parent**: **Just chop off the last bit!**
->   $$\text{Parent}(k) = k / 2 \quad (\text{or } k \gg 1)$$
->   - Parent of 7 (`111`) is 3 (`11`): $7 / 2 = 3$.
->   - Parent of 6 (`110`) is 3 (`11`): $6 / 2 = 3$.
->   - Parent of 5 (`101`) is 2 (`10`): $5 / 2 = 2$.
->   - Parent of 4 (`100`) is 2 (`10`): $4 / 2 = 2$.
+>   ```text
+>   Parent(k) = k / 2   (or k >> 1)
+>   ```
+>   - Parent of 7 (`111`) is 3 (`11`): `7 / 2 = 3`.
+>   - Parent of 6 (`110`) is 3 (`11`): `6 / 2 = 3`.
+>   - Parent of 5 (`101`) is 2 (`10`): `5 / 2 = 2`.
+>   - Parent of 4 (`100`) is 2 (`10`): `4 / 2 = 2`.
 >
 > It was originally just **`k / 2` (a single right-shift)!**
 >
 > **Why is C's formula `(idx - 1) / 2`?**
-> Because C insists on **0-based indexing** ($idx = k - 1 \iff k = idx + 1$):
-> 1. Convert C 0-based index to 1-based: $k = idx + 1$.
-> 2. Find parent using the natural 1-based rule: $k / 2 = (idx + 1) / 2$.
+> Because C insists on **0-based indexing** (`idx = k - 1` <--> `k = idx + 1`):
+> 1. Convert C 0-based index to 1-based: `k = idx + 1`.
+> 2. Find parent using the natural 1-based rule: `k / 2 = (idx + 1) / 2`.
 > 3. Convert back to C 0-based index:
->    $$\text{Parent}_0 = \left\lfloor \frac{idx + 1}{2} \right\rfloor - 1 = \left\lfloor \frac{idx + 1 - 2}{2} \right\rfloor = \left\lfloor \frac{idx - 1}{2} \right\rfloor$$
+>    ```text
+>    Parent_0 = floor((idx + 1) / 2) - 1 = floor((idx - 1) / 2)
+>    ```
 >
 > That is where `(idx - 1) / 2` comes from: it is simply the natural `k >> 1` bitshift shifted into C's 0-indexed universe!
 >
@@ -1503,16 +1519,16 @@ Degenerate "Right-Heavy" Binary Tree:       Array Mapping (Catastrophic Gaps!):
              \                              Indices 7-13: (empty holes)
              [D] (idx 14 = 2*6+2)           Index 14: [D]  <-- 2^N memory waste!
 ```
-For a skewed binary tree of just 30 elements, you would need an array of $2^{30} = 1\text{ Billion slots}$ just to store 30 nodes! 99.999% of the array would be empty holes.
+For a skewed binary tree of just 30 elements, you would need an array of 2^30 = 1,073,741,824 slots (~1 billion slots) just to store 30 nodes! 99.999% of the array would be empty holes.
 
 So what makes the Binary Heap different?
 1. **The "Complete Tree" Invariant (Zero Holes):**
    A heap strictly enforces that **every single level of the tree is completely filled**, except possibly the very bottom level, which is strictly **filled from left to right with zero gaps**.
-   Because of this shape constraint, $N$ nodes map to **exactly indices $0, 1, 2, \dots, N-1$ with ZERO holes**!
+   Because of this shape constraint, N nodes map to **exactly indices 0, 1, 2, ..., N-1 with ZERO holes**!
 2. **Does it have to be binary? (D-ary Heaps in Real Engines):**
-   No! The same trick works for any tree with a fixed branching factor $D$ (like a **4-ary or 8-ary heap**):
-   * $\text{Child}_k(i) = D \cdot i + k + 1$ (for $k \in [0, D-1]$)
-   * $\text{Parent}(i) = (i - 1) / D$
+   No! The same trick works for any tree with a fixed branching factor D (like a **4-ary or 8-ary heap**):
+   * `Child_k(i) = D * i + k + 1` (for `k in [0, D-1]`)
+   * `Parent(i) = (i - 1) / D`
    In fact, many production database kernels use a **4-heap (4 children per node)** instead of a binary heap because each 4-child node fits perfectly within a single 64-byte CPU cache line, cutting cache misses by another 30%!
 
 ---
@@ -1523,7 +1539,9 @@ What is `sift_up` actually trying to achieve, and why does it exist?
 
 ##### The Core Intent: Restoring the Broken Invariant
 In a Min-Heap, the fundamental rule (invariant) that must **always hold across all nodes** is:
-$$\text{Parent Key} \le \text{Child Keys}$$
+```text
+Parent Key <= Child Keys
+```
 The smallest element in the entire system must always sit at the root (`index 0`).
 
 When inserting a new element:
@@ -1602,7 +1620,7 @@ if (heap->data[idx].key >= heap->data[parent].key) {
 ```
 
 ###### Trap 3: Invariant Condition Logic (When to Break vs. When to Swap)
-The Min-Heap invariant states that $\text{Parent.key} \le \text{Child.key}$.
+The Min-Heap invariant states that Parent.key <= Child.key.
 
 There are two equally valid and idiomatic ways to structure this loop:
 
@@ -1665,60 +1683,74 @@ A common point of confusion is: *If we do `inserted_node_idx = parent;`, do we a
 
 ---
 
-##### First-Principles Mathematical Proof: How to Calculate Big-O ($O(\log N)$)
+##### First-Principles Mathematical Proof: How to Calculate Big-O (`O(log N)`)
 
-How do computer scientists mathematically derive that `sift_up` is $O(\log N)$ rather than $O(N)$ or $O(1)$? 
+How do computer scientists mathematically derive that `sift_up` is `O(log N)` rather than `O(N)` or `O(1)`? 
 
 Let us prove it step-by-step from foundational axioms:
 
 ###### Step 1: Work Done Per Loop Iteration
 Look at what happens inside a single loop iteration of `sift_up`:
-1. Calculate parent: `(idx - 1) / 2` $\longrightarrow$ 1 subtraction, 1 bitshift ($O(1)$ constant time).
-2. Compare keys: `heap->data[idx].key < heap->data[parent].key` $\longrightarrow$ 1 CPU comparison ($O(1)$ constant time).
-3. Swap nodes: 3 memory moves of 16-byte structs $\longrightarrow$ ($O(1)$ constant time).
-4. Update cursor: `idx = parent` $\longrightarrow$ 1 register assignment ($O(1)$ constant time).
+1. Calculate parent: `(idx - 1) / 2` --> 1 subtraction, 1 bitshift (`O(1)` constant time).
+2. Compare keys: `heap->data[idx].key < heap->data[parent].key` --> 1 CPU comparison (`O(1)` constant time).
+3. Swap nodes: 3 memory moves of 16-byte structs --> (`O(1)` constant time).
+4. Update cursor: `idx = parent` --> 1 register assignment (`O(1)` constant time).
 
 Every single iteration executes a fixed, constant number of CPU cycles:
-$$\text{Work per step} = C = O(1)$$
+```text
+Work per step = C = O(1)
+```
 
-###### Step 2: Maximum Number of Iterations (Tree Height $H$)
-In each iteration of the loop, our node moves from level $h$ up to level $h - 1$.
-$$\text{Level } h \longrightarrow \text{Level } (h - 1) \longrightarrow \text{Level } (h - 2) \longrightarrow \dots \longrightarrow \text{Level } 0 \text{ (Root)}$$
-The loop can **never execute more times than the height of the tree ($H$)**.
-Therefore, the total time complexity function $T(N)$ is:
-$$T(N) \le C \times H$$
+###### Step 2: Maximum Number of Iterations (Tree Height H)
+In each iteration of the loop, our node moves from level `h` up to level `h - 1`:
+```text
+Level h --> Level (h - 1) --> Level (h - 2) --> ... --> Level 0 (Root)
+```
+The loop can **never execute more times than the height of the tree (H)**.
+Therefore, the total time complexity function `T(N)` is:
+```text
+T(N) <= C * H
+```
 
-###### Step 3: Solving for Tree Height $H$ as a Function of Node Count $N$
+###### Step 3: Solving for Tree Height H as a Function of Node Count N
 In a complete binary tree:
-- Level 0 (Root): $2^0 = 1$ node
-- Level 1: $2^1 = 2$ nodes
-- Level 2: $2^2 = 4$ nodes
-- Level 3: $2^3 = 8$ nodes
-- Level $h$: $2^h$ nodes
+- Level 0 (Root): `2^0 = 1` node
+- Level 1: `2^1 = 2` nodes
+- Level 2: `2^2 = 4` nodes
+- Level 3: `2^3 = 8` nodes
+- Level `h`: `2^h` nodes
 
-The total number of nodes $N$ in a fully saturated binary tree of height $H$ is the sum of a geometric progression:
-$$N = \sum_{h=0}^{H} 2^h = 2^0 + 2^1 + 2^2 + \dots + 2^H$$
+The total number of nodes `N` in a fully saturated binary tree of height `H` is the sum of a geometric progression:
+```text
+N = 2^0 + 2^1 + 2^2 + ... + 2^H
+```
 
-Applying the standard finite geometric series sum formula $S = \frac{a(r^{n} - 1)}{r - 1}$ with $a=1$ and $r=2$:
-$$N = 2^{H+1} - 1$$
+Applying the standard finite geometric series sum formula with `a = 1` and `r = 2`:
+```text
+N = 2^(H+1) - 1
+```
 
-Now, we use high school algebra to isolate height $H$ in terms of $N$:
-$$N + 1 = 2^{H+1}$$
-
-Take the base-2 logarithm ($\log_2$) of both sides:
-$$\log_2(N + 1) = \log_2(2^{H+1})$$
-$$\log_2(N + 1) = H + 1$$
-$$H = \log_2(N + 1) - 1$$
+Now, we use high school algebra to isolate height `H` in terms of `N`:
+```text
+N + 1 = 2^(H+1)
+log2(N + 1) = log2(2^(H+1))
+log2(N + 1) = H + 1
+H = log2(N + 1) - 1
+```
 
 By asymptotic Big-O definition, we drop additive constants:
-$$H = \Theta(\log_2 N)$$
+```text
+H = Theta(log2 N)
+```
 
 ###### Step 4: Final Asymptotic Complexity
 Multiplying the constant work per step by the maximum number of steps:
-$$T(N) = O(1) \times \log_2(N) = \mathbf{O(\log N)}$$
+```text
+T(N) = O(1) * log2(N) = O(log N)
+```
 
 ###### Physical Scale Comparison:
-| Elements in Heap ($N$) | Tree Height ($H \approx \log_2 N$) | Maximum Swaps in `sift_up` | Full Array Sort ($N \log_2 N$) |
+| Elements in Heap (N) | Tree Height (H ~ log2 N) | Maximum Swaps in `sift_up` | Full Array Sort (N log2 N) |
 | :--- | :--- | :--- | :--- |
 | **8** | 3 | **3 comparisons** | 24 operations |
 | **64** | 6 | **6 comparisons** | 384 operations |
@@ -1738,9 +1770,9 @@ What is the fundamental intent of `sift_down`, and when is it invoked?
 
 ###### Scenario 1: Deleting / Popping the Minimum (`min_heap_pop`)
 1. **The Problem:** In a Min-Heap, the smallest element always sits at the root (`index 0`). When a consumer asks for the minimum element, we take `heap->data[0]`. 
-2. **The Vacant Throne:** Now index 0 is empty! We cannot leave a hole, nor can we shift all array elements left by one ($O(N)$ memory copies would destroy our $O(\log N)$ performance).
+2. **The Vacant Throne:** Now index 0 is empty! We cannot leave a hole, nor can we shift all array elements left by one (O(N) memory copies would destroy our O(log N) performance).
 3. **The Leaf Replacement:** To maintain the contiguous "Complete Binary Tree" invariant, we take the **very last element** in the array (`heap->data[--heap->size]`) and move it into index 0!
-4. **The Impostor:** But that leaf element came from the bottom of the tree—it is typically a **large value** (e.g. `90`)! Placing `90` at the root violently breaks the invariant ($\text{Parent} \le \text{Children}$) because its children might be `15` and `25`.
+4. **The Impostor:** But that leaf element came from the bottom of the tree—it is typically a **large value** (e.g. `90`)! Placing `90` at the root violently breaks the invariant (Parent <= Children) because its children might be `15` and `25`.
 5. **The Sinking Mission:** The intent of `sift_down` is to **sink that heavy element down the tree until it is smaller than both of its children (or becomes a leaf).**
 
 ###### Scenario 2: Streaming Tournament Replacement (`min_heap_replace_top`)
@@ -1748,7 +1780,7 @@ In analytical database engines doing external merge sort (and LSM part compactio
 1. We read the winning tuple at the root (`data[0]`).
 2. We read the next tuple from that same disk run (say `70`).
 3. We overwrite the root directly: `heap->data[0] = next_tuple;`.
-4. We call `min_heap_sift_down(heap, 0)` to sink `70` down to its proper level in $O(\log K)$ time. Zero allocations, zero array resizing!
+4. We call `min_heap_sift_down(heap, 0)` to sink `70` down to its proper level in O(log K) time. Zero allocations, zero array resizing!
 
 ```text
 Step 1: Replace Root with 70         Step 2: Smaller Child is 15. SWAP!   Step 3: Smaller Child is 18. SWAP!
@@ -1801,7 +1833,7 @@ Instead of nested combinatorial branches, systems kernels maintain a **`smallest
 - Initialize `smallest = idx;` (assume current node is champion).
 - Compare Left: If left child is smaller than current champion, set `smallest = left;`.
 - Compare Right: If right child exists and is smaller than the current champion (beating both `idx` and `left`), set `smallest = right;`.
-- Finish: If `smallest == idx`, no child was smaller $\longrightarrow$ break. Otherwise, execute a single unified swap with `smallest` and continue sinking!
+- Finish: If `smallest == idx`, no child was smaller --> break. Otherwise, execute a single unified swap with `smallest` and continue sinking!
 
 ###### Two Subtle Implementation Traps in `sift_down`:
 1. **The 0-Indexed `<=` Off-By-One Trap:**
@@ -1820,11 +1852,11 @@ Instead of nested combinatorial branches, systems kernels maintain a **`smallest
 
 #### 6. Authoritative References & Recommended Reading on Binary Heaps
 
-For deep theoretical foundations, proofs of the $O(N)$ heap construction bound, and historical origins of the data structure, consult these gold-standard references:
+For deep theoretical foundations, proofs of the O(N) heap construction bound, and historical origins of the data structure, consult these gold-standard references:
 
 ##### 1. The Original Discovery Paper
 * **Williams, J. W. J. (1964).** *"Algorithm 232: Heapsort"*. **Communications of the ACM (CACM)**, 7(6), 347–348.
-  - *Significance:* The historic paper that first introduced the binary heap, the 1-based array mapping arithmetic ($2i, 2i+1, i/2$), and the in-place Heapsort algorithm.
+  - *Significance:* The historic paper that first introduced the binary heap, the 1-based array mapping arithmetic (2*i, 2*i + 1, i / 2), and the in-place Heapsort algorithm.
   - [ACM Digital Library Reference (DOI: 10.1145/368888.369029)](https://doi.org/10.1145/368888.369029)
 
 ##### 2. Classic Academic Textbooks
@@ -1863,9 +1895,9 @@ You made a stellar software engineering observation:
 Extracting the priority queue into an independent, standalone module (`min_heap.h` / `min_heap.c`) delivers two massive architectural wins for `simpledb`:
 
 ##### 1. Dual Reusability (Day 15 Sorter + Day 19 Part Compactor)
-A Min-Heap is not specific to `ORDER BY`. In ClickHouse and `simpledb`, we need a streaming $K$-way min-heap in **two separate subsystems**:
-* **Day 15 (Today):** Merging $K$ temporary `.run` scratch files during query execution.
-* **Day 19 (The Part Compactor):** Merging $K$ immutable on-disk columnar parts (`part_000`, `part_001`, `part_002`) into a consolidated table part during background storage compaction.
+A Min-Heap is not specific to `ORDER BY`. In ClickHouse and `simpledb`, we need a streaming K-way min-heap in **two separate subsystems**:
+* **Day 15 (Today):** Merging K temporary `.run` scratch files during query execution.
+* **Day 19 (The Part Compactor):** Merging K immutable on-disk columnar parts (`part_000`, `part_001`, `part_002`) into a consolidated table part during background storage compaction.
 
 By making `min_heap` a standalone module, Day 19's compactor can `#include "simpledb/min_heap.h"` directly without pulling in any external sorting logic!
 
@@ -1912,7 +1944,7 @@ typedef struct {
 
 * **The Benefit:** 100% decoupling. The heap is an abstract data type that can order strings, JSON documents, float vectors, or database records without changing a single line of heap code.
 * **The Cost (The OLAP Performance Killer):**
-  1. **Indirect Function Call Penalties:** In a K-way merge of 100 million records across $K = 64$ runs, each record requires $\log_2(64) = 6$ levels of sifting. Each level performs 2 child comparisons. That equals **$1.2 \times 10^8$ indirect function calls** through a function pointer.
+  1. **Indirect Function Call Penalties:** In a K-way merge of 100 million records across K = 64 runs, each record requires log2(64) = 6 levels of sifting. Each level performs 2 child comparisons. That equals **120,000,000 indirect function calls** through a function pointer.
   2. **Pipeline Stalls & Inlining Defeat:** Modern superscalar CPUs (Intel x86, Apple Silicon ARM) cannot inline function pointers. The CPU cannot speculatively execute through the dynamic jump without risking branch misprediction penalties (15–20 CPU cycles per mispredict).
   3. **Pointer Dereferencing & L1 Cache Eviction:** To compare two elements, the CPU must dereference `items[i]` to reach the object, and then dereference the object to reach the sorting key. This pointer-chasing pattern degrades the flat array's spatial cache locality.
 
@@ -2094,10 +2126,10 @@ Low-Level Kernels (Roots):   [ sift_up ]   [ sift_down ]      [ sift_down ]     
 
 2. **Step 2: The User-Facing API (`push`, `pop`, `peek`, `replace_top`):**
    Once the sift kernels are written, the user-facing operations become trivial 4-to-6-line wrappers:
-   - **`push(key, payload)`**: Bounds-check capacity $\longrightarrow$ place new element at index `heap->size` $\longrightarrow$ call `sift_up(heap, heap->size)` $\longrightarrow$ increment `heap->size++`.
+   - **`push(key, payload)`**: Bounds-check capacity --> place new element at index `heap->size` --> call `sift_up(heap, heap->size)` --> increment `heap->size++`.
    - **`peek(out_node)`**: Return `heap->data[0]` if `size > 0`.
-   - **`pop(out_node)`**: Save root `heap->data[0]` $\longrightarrow$ move last element `heap->data[--heap->size]` to root $\longrightarrow$ call `sift_down(heap, 0)`.
-   - **`replace_top(key, payload)`**: Overwrite root `heap->data[0]` with new node $\longrightarrow$ call `sift_down(heap, 0)`.
+   - **`pop(out_node)`**: Save root `heap->data[0]` --> move last element `heap->data[--heap->size]` to root --> call `sift_down(heap, 0)`.
+   - **`replace_top(key, payload)`**: Overwrite root `heap->data[0]` with new node --> call `sift_down(heap, 0)`.
 
 Therefore, **always write the sift kernels first**. You cannot implement or test `push` or `pop` without them!
 
@@ -2107,7 +2139,7 @@ Therefore, **always write the sift kernels first**. You cannot implement or test
 
 What is the exact mission of `min_heap_push(min_heap_t *heap, int64_t key, void *payload)`?
 
-Its intent is to safely admit a new candidate into the priority queue in $O(\log K)$ time while preserving both the **Complete Tree Structural Invariant** and the **Min-Heap Key Invariant**.
+Its intent is to safely admit a new candidate into the priority queue in O(log K) time while preserving both the **Complete Tree Structural Invariant** and the **Min-Heap Key Invariant**.
 
 ```text
                Anatomy of min_heap_push()
@@ -2139,7 +2171,7 @@ Its intent is to safely admit a new candidate into the priority queue in $O(\log
 
 The remaining three query operations complete the priority queue contract:
 
-#### 1. `min_heap_peek(heap, out_node)`: $O(1)$ Inspection
+#### 1. `min_heap_peek(heap, out_node)`: O(1) Inspection
 - **Intent:** Examine the current minimum key without modifying the heap.
 - **Contract:** If `!heap || heap->size == 0 || !out_node`, return `false`. Otherwise, copy `*out_node = heap->data[0]` and return `true`.
 
@@ -2176,7 +2208,7 @@ if (!heap || heap->size == 0 || !out_node) {
 
 ---
 
-#### 2. `min_heap_pop(heap, out_node)`: $O(\log K)$ Extraction
+#### 2. `min_heap_pop(heap, out_node)`: O(log K) Extraction
 - **Intent:** Extract and remove the champion from the root, shrinking the active heap by 1 element.
 - **Step-by-Step Contract:**
   1. Guard against empty heap: if `!heap || heap->size == 0`, return `false`.
@@ -2214,7 +2246,7 @@ if (!heap || heap->size == 0 || !out_node) {
 
 ---
 
-#### 3. `min_heap_replace_top(heap, key, payload)`: $O(\log K)$ Tournament Step
+#### 3. `min_heap_replace_top(heap, key, payload)`: O(log K) Tournament Step
 - **Intent:** In streaming K-way merge, we want to replace the consumed root with the next record from the same run file without shrinking and re-growing the array.
 - **Contract:** If `!heap || heap->size == 0`, return `false`. Overwrite `heap->data[0] = (heap_node_t){ .key = key, .payload = payload };`, call `min_heap_sift_down(heap, 0);`, and return `true`.
 
@@ -2223,14 +2255,16 @@ A tempting intuition when thinking about arrays is: *"To replace the first eleme
 
 In a binary heap, sliding the array left is both computationally disastrous and structurally fatal:
 
-1. **The $O(K)$ vs. $O(\log K)$ Algorithmic Disaster:**
-   - Shifting an array of $K$ elements left requires copying $K-1$ elements in RAM ($O(K)$ work).
-   - If merging $K = 1,024$ runs across $10,000,000$ records:
+1. **The O(K) vs. O(log K) Algorithmic Disaster:**
+   - Shifting an array of K elements left requires copying K - 1 elements in RAM (O(K) work).
+   - If merging K = 1,024 runs across 10,000,000 records:
      - Sliding the array left executes **10.2 billion element copies**!
-     - In contrast, a binary heap sift-down performs at most $\log_2(1024) = 10$ steps $\longrightarrow$ **100 million operations**! The heap is **100x faster**.
+     - In contrast, a binary heap sift-down performs at most log2(1024) = 10 steps --> **100 million operations**! The heap is **100x faster**.
 2. **The Destruction of Tree Geometry:**
    - An array-backed heap is not a sorted list; it is a **Complete Binary Tree** where relationships are strictly encoded by index arithmetic:
-     $$\text{left}(i) = 2i + 1, \quad \text{right}(i) = 2i + 2$$
+     ```text
+     left(i) = 2*i + 1,    right(i) = 2*i + 2
+     ```
    - If you slide all elements left by 1 index:
      - Old index 1 becomes the new root at index 0.
      - Old index 2 (previously the right child of index 0) becomes index 1 (which is supposed to be the left child of index 0).
@@ -2243,8 +2277,8 @@ In a binary heap, sliding the array left is both computationally disastrous and 
      ```c
      heap->data[0] = (heap_node_t){ .key = key, .payload = payload };
      ```
-   - All other $K-1$ elements in the tree stay in their exact same array slots!
-   - We invoke `min_heap_sift_down(heap, 0)`. The newcomer sinks down along a single branch of the tree in $O(\log K)$ time until it settles into its natural resting place.
+   - All other K - 1 elements in the tree stay in their exact same array slots!
+   - We invoke `min_heap_sift_down(heap, 0)`. The newcomer sinks down along a single branch of the tree in O(log K) time until it settles into its natural resting place.
 
 > [!WARNING]
 > **POSIX Status Codes vs. `bool` Return Values: The `return 0;` Trap:**
@@ -2358,7 +2392,7 @@ The standalone priority queue was compiled with strict project flags (`-Wall -We
 3. **Root Champion Inspection:** `min_heap_peek` safely inspected the minimum `10` without mutation.
 4. **Ascending Extraction:** Popped nodes in strict ascending order (`10 -> 20 -> 30 -> 40 -> 50`) while maintaining exact payload ownership.
 5. **Empty State Rejection:** Both `min_heap_pop` and `min_heap_peek` safely returned `false` without memory corruption or segmentation faults.
-6. **In-Place Top Replacement:** Overwriting root `100` with `300` in `{100, 200}` promoted `200` to the throne and sank `300` in a single $O(\log K)$ sift-down pass.
+6. **In-Place Top Replacement:** Overwriting root `100` with `300` in `{100, 200}` promoted `200` to the throne and sank `300` in a single O(log K) sift-down pass.
 
 > [!NOTE]
 > **The Stale Test Binary Trap vs. Failed Incremental Builds:**
@@ -2388,7 +2422,7 @@ Encapsulation dictates that the sorter should never touch the heap's internal me
 
 #### 2. The Empty Heap Seeding Trap (`replace_top` vs. `push`)
 `min_heap_replace_top()` is strictly an optimization for replacing the champion of an **already populated** tournament. If called when `heap->size == 0`, it rejects the operation and returns `false`.
-To seed the tournament with the initial tuple from each of the $K$ run files, you must use:
+To seed the tournament with the initial tuple from each of the K run files, you must use:
 ```c
 min_heap_push(sorter->heap, key, payload);
 ```

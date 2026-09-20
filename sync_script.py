@@ -129,6 +129,11 @@ day15_body = read_local('/Users/dmanchon/repos/cdb/day15.md') if os.path.exists(
 if day15_body:
     write_local('/Users/dmanchon/repos/cdb/day15.md', day15_body)
 
+# Day 16
+day16_body = read_local('/Users/dmanchon/repos/cdb/day16.md') if os.path.exists('/Users/dmanchon/repos/cdb/day16.md') else ""
+if day16_body:
+    write_local('/Users/dmanchon/repos/cdb/day16.md', day16_body)
+
 # Update Astro files
 astro_dir = '/Users/dmanchon/repos/astro-blog/src/content/blog'
 update_file(f'{astro_dir}/day0-motivations-and-influences.md', day0_body)
@@ -149,6 +154,20 @@ if day15_body:
         with open(day15_path, 'w') as f:
             f.write('---\ntitle: "Day 15: External Merge Sort (Disk-Spilling ORDER BY)"\npubDate: 2026-08-29\ndescription: "Implementing out-of-core external merge sort with fixed memory budgets and K-way streaming min-heap merge."\n---\n\n')
     update_file(day15_path, day15_body)
+if day16_body:
+    day16_path = f'{astro_dir}/day16.md'
+    if not os.path.exists(day16_path):
+        with open(day16_path, 'w') as f:
+            f.write('---\ntitle: "Day 16: Partitioned Grace Hash Aggregation (Disk Spilling GROUP BY)"\npubDate: 2026-08-30\ndescription: "Implementing partitioned grace hash aggregation for high-cardinality GROUP BY with bounded memory."\n---\n\n')
+    update_file(day16_path, day16_body)
+
+day17_body = read_local('/Users/dmanchon/repos/cdb/day17.md') if os.path.exists('/Users/dmanchon/repos/cdb/day17.md') else ""
+if day17_body:
+    day17_path = f'{astro_dir}/day17.md'
+    if not os.path.exists(day17_path):
+        with open(day17_path, 'w') as f:
+            f.write('---\ntitle: "Day 17: The Multi-Part Table Scanner (Lazy Data Loading & Granule Pruning)"\npubDate: 2026-08-31\ndescription: "Building a Volcano-model Table Scanner to stream data from disk parts and memory buffers."\n---\n\n')
+    update_file(day17_path, day17_body)
 
 print("Done")
 

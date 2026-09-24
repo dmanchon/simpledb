@@ -169,6 +169,14 @@ if day17_body:
             f.write('---\ntitle: "Day 17: The Multi-Part Table Scanner (Lazy Data Loading & Granule Pruning)"\npubDate: 2026-08-31\ndescription: "Building a Volcano-model Table Scanner to stream data from disk parts and memory buffers."\n---\n\n')
     update_file(day17_path, day17_body)
 
+day18_body = read_local('/Users/dmanchon/repos/cdb/day18.md') if os.path.exists('/Users/dmanchon/repos/cdb/day18.md') else ""
+if day18_body:
+    day18_path = f'{astro_dir}/day18.md'
+    if not os.path.exists(day18_path):
+        with open(day18_path, 'w') as f:
+            f.write('---\ntitle: "Day 18: APL / K Vectorized Physical Execution Pipeline"\npubDate: 2026-09-01\ndescription: "Assembling execution pipeline executing scan, filter, gather, aggregate."\n---\n\n')
+    update_file(day18_path, day18_body)
+
 print("Done")
 
 

@@ -131,12 +131,12 @@ bool grace_hash_agg_next(grace_hash_agg_t *agg, agg_output_record_t *out_record)
         free(agg->current_hash_table);
         agg->current_hash_table = NULL;
         agg->hash_table_size = 0;
-        agg->hash_table_iter_idx = 0;
+        agg->hash_table_iter_idx = 0; agg->hash_table_capacity = 0;
         // next partition
         agg_input_record_t in;
         agg->partition_files[agg->current_partition_idx] =
             fopen(agg->partition_paths[agg->current_partition_idx], "rb");
-        while (fread(&in, sizeof(in), 1, agg->partition_files[agg->current_partition_idx]) == 1) {
+        if (agg->partition_files[agg->current_partition_idx] == NULL) { agg->current_partition_idx++; continue; } while (fread(&in, sizeof(in), 1, agg->partition_files[agg->current_partition_idx]) == 1) {
             bool exists = false;
             for (size_t i = 0; i < agg->hash_table_size; i++) {
                 if (agg->current_hash_table[i].group_key == in.group_key) {
@@ -156,7 +156,7 @@ bool grace_hash_agg_next(grace_hash_agg_t *agg, agg_output_record_t *out_record)
 
                 agg_output_record_t new = {
                     .count_value = 1, .sum_value = in.agg_value, .group_key = in.group_key};
-                agg->current_hash_table[agg->hash_table_size++] = new;
+                printf("Added to hash table size=%zu group=%d\n", agg->hash_table_size, new.group_key); agg->current_hash_table[agg->hash_table_size++] = new;
             }
         };
         fclose(agg->partition_files[agg->current_partition_idx]);

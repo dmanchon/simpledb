@@ -4,10 +4,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/signal.h>
+#include <sys/stat.h>
 
 grace_hash_agg_t *grace_hash_agg_create(const char *temp_dir, size_t mem_limit_records,
                                         size_t num_partitions) {
-    grace_hash_agg_t *agg = malloc(sizeof(*agg));
+    grace_hash_agg_t *agg = calloc(1, sizeof(*agg));
 
     agg->in_mem_count = 0;
     agg->mem_limit_records = mem_limit_records;
@@ -24,7 +25,7 @@ grace_hash_agg_t *grace_hash_agg_create(const char *temp_dir, size_t mem_limit_r
         return NULL;
     }
 
-    agg->partition_files = malloc(sizeof(FILE *) * num_partitions);
+    agg->partition_files = calloc(sizeof(FILE *), num_partitions);
     if (!agg->partition_files) {
         free(agg->in_mem_buf);
         free(agg->partition_counts);
@@ -48,6 +49,8 @@ grace_hash_agg_t *grace_hash_agg_create(const char *temp_dir, size_t mem_limit_r
 
     agg->num_partitions = num_partitions;
     snprintf(agg->temp_dir, sizeof(agg->temp_dir), "%s", temp_dir);
+
+    mkdir(agg->temp_dir, 0755);
 
     return agg;
 }
@@ -81,7 +84,7 @@ int grace_hash_agg_push(grace_hash_agg_t *agg, const agg_input_record_t *records
                 uint32_t p = agg->in_mem_buf[j].group_key % agg->num_partitions;
                 if (agg->partition_files[p] == NULL) {
                     // new file
-                    agg->partition_files[p] = fopen(agg->partition_paths[p], "ab");
+                    agg->partition_files[p] = fopen(agg->partition_paths[p], "wb");
                     if (!agg->partition_files[p]) {
                         return -1;
                     }
@@ -100,7 +103,7 @@ int grace_hash_agg_finish(grace_hash_agg_t *agg) {
         uint32_t p = agg->in_mem_buf[j].group_key % agg->num_partitions;
         if (agg->partition_files[p] == NULL) {
             // new file
-            agg->partition_files[p] = fopen(agg->partition_paths[p], "ab");
+            agg->partition_files[p] = fopen(agg->partition_paths[p], "wb");
             if (!agg->partition_files[p]) {
                 return -1;
             }
@@ -120,7 +123,7 @@ int grace_hash_agg_finish(grace_hash_agg_t *agg) {
 }
 
 bool grace_hash_agg_next(grace_hash_agg_t *agg, agg_output_record_t *out_record) {
-    if (!agg || agg->current_partition_idx >= agg->num_partitions) {
+    if (!agg) {
         return false;
     }
 

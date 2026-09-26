@@ -423,7 +423,7 @@ int grace_hash_agg_finish(grace_hash_agg_t *agg) {
 }
 
 bool grace_hash_agg_next(grace_hash_agg_t *agg, agg_output_record_t *out_record) {
-    if (!agg || agg->current_partition_idx >= agg->num_partitions) {
+    if (!agg) {
         return false;
     }
 

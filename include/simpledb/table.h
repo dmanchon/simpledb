@@ -4,6 +4,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <stdatomic.h>
+#include <pthread.h>
+
 #include "simpledb/fts.h"
 #include "simpledb/schema_registry.h"
 
@@ -11,11 +14,17 @@
 typedef struct table_part_t {
     char part_path[256];
     size_t row_count;
+    
+    // Atomic reference count for concurrent readers (0 = safe to delete)
+    _Atomic size_t refcount;
 } table_part_t;
 
 typedef struct table_t {
     char name[64];
     schema_registry_t *schema;
+
+    // Concurrency control for catalog metadata (parts array)
+    pthread_rwlock_t catalog_lock;
 
     // In-memory columnar buffers (one per column in schema)
     void **column_buffers;

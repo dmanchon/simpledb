@@ -218,6 +218,13 @@ size_t part_merger_execute(part_merger_t *merger) {
     return 0;
 }
 
+void part_merger_destroy(part_merger_t *merger) {
+    if (!merger) return;
+    free(merger->part_ids_to_merge);
+    free(merger->zombies);
+    free(merger);
+}
+
 void *table_background_compactor_thread(void *arg) {
     table_t *table = (table_t *)arg;
 

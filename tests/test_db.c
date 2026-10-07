@@ -17,6 +17,7 @@
 #include "simpledb/grace_hash_agg.h"
 #include "simpledb/table_scanner.h"
 #include "simpledb/exec_pipeline.h"
+#include "simpledb/part_merger.h"
 #include <time.h>
 #include <assert.h>
 #include <stdint.h>
@@ -1082,6 +1083,65 @@ int test_exec_pipeline() {
     return 0;
 }
 
+void test_part_merger(void) {
+    // 1. Setup a Table
+    schema_registry_t* schema = schema_registry_create();
+    schema_registry_add_column(schema, "user_id", COL_TYPE_I32);
+    schema_registry_add_column(schema, "amount", COL_TYPE_I32);
+    
+    table_t* table = table_create("events_merge_test");
+    table->schema = schema;
+    table->column_buffers = malloc(sizeof(void*) * 2);
+    table->column_buffers[0] = buffer_i32_create(4);
+    table->column_buffers[1] = buffer_i32_create(4);
+    
+    // 2. Insert Data and Flush to create Part 1 (simulate batch 1)
+    int32_t users1[] = {1, 2};
+    int32_t amounts1[] = {100, 200};
+    const void **batch1[2];
+    batch1[0] = (const void*)users1;
+    batch1[1] = (const void*)amounts1;
+    
+    assert(table_insert_batch(table, (const void ***)batch1, 2, 2) == 0);
+    assert(table_flush(table, ".") == 0); // Creates part 0
+    
+    // 3. Insert Data and Flush to create Part 2 (simulate batch 2)
+    int32_t users2[] = {3, 4};
+    int32_t amounts2[] = {300, 400};
+    const void **batch2[2];
+    batch2[0] = (const void*)users2;
+    batch2[1] = (const void*)amounts2;
+    
+    assert(table_insert_batch(table, (const void ***)batch2, 2, 2) == 0);
+    assert(table_flush(table, ".") == 0); // Creates part 1
+    
+    // Assume part 0 and part 1 are now immutable parts on disk.
+    // Let's verify we have exactly 2 parts.
+    assert(table->num_parts == 2);
+    
+    // 4. Run the Compactor
+    merge_config_t config = {
+        .max_parts_to_merge = 10,
+        .min_rows_to_merge = 1,
+        .force_merge_all = true // Force compaction of all existing parts
+    };
+    
+    part_merger_t* merger = part_merger_create(table, config);
+    if (merger->num_parts > 0) {
+        part_merger_execute(merger);
+    }
+    part_merger_destroy(merger);
+    
+    // 5. Verify the Table State
+    // The table should now only have 1 active, consolidated part!
+    assert(table->num_parts == 1);
+    
+    // 6. Cleanup
+    table_destroy(table);
+    
+    printf("Day 19 MergeTree Part Compactor test passed!\n");
+}
+
 int main(void) {
     database_t* db = db_open("test_db");
     assert(db != NULL);
@@ -1112,6 +1172,7 @@ int main(void) {
     test_grace_hash_agg();
     test_table_scanner();
     test_exec_pipeline();
+    test_part_merger();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

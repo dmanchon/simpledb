@@ -15,16 +15,17 @@ typedef struct {
 typedef struct {
     table_t* table;
     merge_config_t config;
-    
+
     // Internal state tracking which parts are currently being merged
     size_t* part_ids_to_merge;
+    table_part_t **zombies;
     size_t num_parts;
 } part_merger_t;
 
 // Initialize a part merger job for a table
 part_merger_t* part_merger_create(table_t* table, merge_config_t config);
 
-// Execute the merge on the main thread (blocking). 
+// Execute the merge on the main thread (blocking).
 // Returns the ID of the newly created consolidated part.
 // Returns (size_t)-1 if no merge was necessary or an error occurred.
 size_t part_merger_execute(part_merger_t* merger);

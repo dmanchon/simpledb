@@ -4,8 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <stdatomic.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
 #include "simpledb/fts.h"
 #include "simpledb/schema_registry.h"
@@ -14,7 +14,7 @@
 typedef struct table_part_t {
     char part_path[256];
     size_t row_count;
-    
+
     // Atomic reference count for concurrent readers (0 = safe to delete)
     _Atomic size_t refcount;
 } table_part_t;
@@ -94,6 +94,8 @@ int table_flush(table_t *table, const char *data_dir);
 
 // Retrieve all immutable flushed parts on disk
 table_part_t **table_get_parts(table_t *table, size_t *out_num_parts);
+
+void table_release_parts(table_part_t **parts, size_t num_parts);
 
 // Retrieve the active in-memory columnar buffers
 void **table_get_active_buffer(table_t *table, size_t *out_row_count);

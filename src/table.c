@@ -244,6 +244,15 @@ table_part_t **table_get_parts(table_t *table, size_t *out_num_parts) {
     pthread_rwlock_unlock(&table->catalog_lock);
     return tmp;
 }
+
+void table_release_parts(table_part_t **parts, size_t num_parts) {
+    if (!parts) return;
+    for (size_t i = 0; i < num_parts; i++) {
+        atomic_fetch_sub(&parts[i]->refcount, 1);
+    }
+    free(parts);
+}
+
 void **table_get_active_buffer(table_t *table, size_t *out_row_count) {
     if (!table) {
         if (out_row_count)

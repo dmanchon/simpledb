@@ -357,3 +357,423 @@ Since you will be coding offline, here is a quick reference for the POSIX thread
 #### 4. Sleep (`<unistd.h>`)
 *   **`unsigned int sleep(unsigned int seconds);`**
     Suspends the thread for the specified number of seconds. Useful inside your background `while(1)` compactor loop to prevent pegging a CPU core at 100%.
+
+---
+
+### Socratic Debugging Session: Building `part_merger_create`
+
+During implementation, we identified a few critical C-specific gotchas to watch out for when scaffolding the compactor.
+
+#### 1. Releasing the References (`table.c`)
+When `table_get_parts` copies the active parts array for a query (or our compactor), it increments the atomic `refcount`. This guarantees the parts won't be deleted while we read them. However, we must provide a way to drop those references when we are finished:
+
+```c
+// Add to src/table.c
+void table_release_parts(table_part_t **parts, size_t num_parts) {
+    if (!parts) return;
+    for (size_t i = 0; i < num_parts; i++) {
+        atomic_fetch_sub(&parts[i]->refcount, 1);
+    }
+    free(parts);
+}
+```
+
+#### 2. Capping the Merge Config
+The goal of the compactor is to merge a *bounded* number of parts (e.g., merging 10 small parts into 1). When initializing `part_merger_t`, make sure you don't accidentally try to merge all parts if the table has hundreds! Cap the size using `config.max_parts_to_merge`:
+
+```c
+size_t merge_count = (num_parts < config.max_parts_to_merge) ? num_parts : config.max_parts_to_merge;
+merger->num_parts = merge_count;
+```
+
+#### 3. Resolving the Sorted `part_id`
+We use `qsort` to sort the parts by `row_count` so we always merge the smallest parts first. However, after sorting, the array indices no longer match the original `table->parts` indices! You must map them back to their original IDs to execute the merge correctly.
+
+```c
+// Incorrect: Hardcoding the indices ignores the qsort!
+for (size_t i = 0; i < merger->num_parts; i++) {
+    merger->part_ids_to_merge[i] = i; 
+}
+
+// Correct: Grab the original part_id from the sorted struct
+for (size_t i = 0; i < merger->num_parts; i++) {
+    merger->part_ids_to_merge[i] = items[i].part_id;
+}
+```
+
+#### 4. The `min_rows_to_merge` Heuristic (And the Compaction Deadlock)
+In `merge_config_t`, the `min_rows_to_merge` field prevents the compactor from thrashing the disk. However, enforcing it naively creates a classic **Compaction Deadlock**: 
+If `max_parts_to_merge = 10` and `min_rows_to_merge = 100,000`, and you ingest in batches of 1,000 rows, the 10 smallest parts will only ever equal 10,000 rows. The compactor will abort. More parts will pile up. Even with 100 parts, the 10 smallest still only equal 10,000 rows, so it aborts again! Eventually, the database crashes from "Too Many Open Files".
+
+To fix this, `min_rows_to_merge` should only prevent merges when the system is healthy (low part count). If the table's total part count hits the ceiling (`table->num_parts >= config.max_parts_to_merge`), we are in an "emergency" state and MUST merge the smallest parts to reduce file handles, bypassing the minimum rows check entirely:
+
+```c
+    if (!config.force_merge_all && num_parts < config.max_parts_to_merge) {
+        size_t total_rows = 0;
+        for (size_t i = 0; i < merger->num_parts; i++) {
+            size_t id = merger->part_ids_to_merge[i];
+            total_rows += parts[id]->row_count;
+        }
+        
+        if (total_rows < config.min_rows_to_merge) {
+            merger->num_parts = 0; // Abort merge, we are healthy and don't have enough volume yet
+        }
+    }
+```
+
+#### 5. The `qsort` Comparator (`size_t` underflow)
+When sorting parts, you always want to sort in **Ascending** order (smallest to largest) so you merge the smallest parts first. Merging a massive 10GB part with a tiny 1MB part causes extreme write amplification, whereas merging ten 1MB parts is extremely fast.
+
+However, when writing the comparator, be careful not to subtract `row_count`:
+
+```c
+// DANGEROUS: row_count is an unsigned size_t. 
+// 10 - 100 underflows to 18446744073709551526!
+static int part_comparator(const void *a, const void *b) {
+    return ((part_item *)a)->part->row_count - ((part_item *)b)->part->row_count; 
+}
+
+// CORRECT: Use explicit comparisons
+static int part_comparator(const void *a, const void *b) {
+    size_t count_a = ((part_item *)a)->part->row_count;
+    size_t count_b = ((part_item *)b)->part->row_count;
+    
+    if (count_a < count_b) return -1;
+    if (count_a > count_b) return 1;
+    return 0;
+}
+```
+
+#### 6. Scaffolding the $K$-Way Merge (`part_merger_execute`)
+Because `table_scanner_t` reads a table sequentially, we cannot use it for a $K$-way merge which requires reading multiple parts *simultaneously*. Instead, we must manage the `column_reader_t` instances manually. 
+
+A great pattern is to define a `part_stream_t` struct to keep track of each part's readers and current row state:
+
+```c
+typedef struct {
+    size_t part_id;
+    column_reader_t** readers;   // Array of readers (one per column for this part)
+    int32_t current_key;         // The sort key for the min_heap (e.g., col 0)
+    int32_t* current_values;     // Buffer holding the current row's values for the other columns
+} part_stream_t;
+```
+
+When you implement `part_merger_execute`, you will allocate an array of `part_stream_t` and a `min_heap_t` (built on Day 15). You read the very first row from each part into its stream, and push the stream into the heap using `min_heap_push`. Because the heap node's `payload` is a `void*`, you simply pass the pointer to the stream:
+
+```c
+// Inside part_merger_execute:
+min_heap_t* heap = min_heap_create(merger->num_parts);
+
+for (size_t i = 0; i < merger->num_parts; i++) {
+    // ... initialize the column readers for streams[i] ...
+    // ... read the first row into streams[i].current_key ...
+    
+    // Seed the heap (the payload is the address of the stream struct)
+    min_heap_push(heap, streams[i].current_key, &streams[i]);
+}
+```
+
+#### Understanding the Memory: `streams` vs `writers`
+A common point of confusion when scaffolding `part_merger_execute` is mixing up the readers and writers. You need two distinct arrays:
+
+1. **The Input `streams` (Readers):** An array of `part_stream_t` of size `merger->num_parts` ($K$). This represents the $K$ small parts you are actively pulling data from.
+   ```c
+   part_stream_t *streams = malloc(sizeof(part_stream_t) * merger->num_parts);
+   for (size_t i = 0; i < merger->num_parts; i++) {
+       streams[i].part_id = merger->part_ids_to_merge[i];
+       streams[i].readers = malloc(sizeof(column_reader_t*) * table->schema->count);
+       // Initialize readers for this specific part...
+   }
+   ```
+
+2. **The Output `writers`:** An array of `column_writer_t*` of size `table->schema->count`. Because compaction merges $K$ parts into **exactly one** new consolidated part, you only need one writer per column!
+   ```c
+   column_writer_t **writers = malloc(sizeof(column_writer_t*) * table->schema->count);
+   for (size_t col = 0; col < table->schema->count; col++) {
+       // Initialize writer for the new consolidated part directory...
+   }
+   ```
+
+#### 7. Batching Writes (Avoiding Single Row I/O)
+When popping rows from the Min-Heap, you are resolving one row at a time. However, writing to disk row-by-row is incredibly inefficient and defeats the purpose of a columnar database. You must buffer the rows in memory and write them in **Batches** (Granules of 8,192 rows).
+
+To do this, allocate an in-memory array for each column that holds 8,192 elements. As you pop from the heap, append the values to these arrays. When the arrays fill up, flush them using the `column_writer_t` and reset the counter.
+
+```c
+// 1. Setup the writers for the NEW consolidated part
+column_writer_t** writers = malloc(sizeof(column_writer_t*) * table->schema->count);
+// ... initialize writers ...
+
+// 2. Setup the in-memory output buffers (Batch size = 8192)
+int32_t* out_keys = malloc(sizeof(int32_t) * 8192);
+int32_t* out_vals = malloc(sizeof(int32_t) * 8192);
+size_t out_row_count = 0;
+
+heap_node_t min_node;
+while (min_heap_pop(heap, &min_node)) {
+    part_stream_t* stream = (part_stream_t*)min_node.payload;
+    
+    // 3. Buffer the row in memory
+    out_keys[out_row_count] = stream->current_key;
+    out_vals[out_row_count] = stream->current_values[0]; // Assuming 1 extra col
+    out_row_count++;
+    
+    // 4. Flush the batch if full!
+    if (out_row_count == 8192) {
+        column_writer_append(writers[0], out_keys, 8192);
+        column_writer_append(writers[1], out_vals, 8192);
+        out_row_count = 0;
+    }
+    
+    // 5. Advance the reader for this stream and push the next row back into the heap...
+}
+
+// 6. Don't forget to flush the leftover rows!
+if (out_row_count > 0) {
+    column_writer_append(writers[0], out_keys, out_row_count);
+    column_writer_append(writers[1], out_vals, out_row_count);
+}
+```
+
+#### 8. Demystifying `part_stream_t` (The Vectorized State Machine)
+Because our database is *Vectorized* and reads disk data in 8,192-row chunks called Granules, the Min-Heap loop is slightly more complex than a standard row-based database.
+
+When we call `column_reader_next_granule_i32()`, we don't get one row; we get a `slice_i32_t` containing up to 8,192 rows! But the Min-Heap must sort *single rows*. 
+
+Therefore, our `part_stream_t` needs to cache the current granules, keep an index of which row it is currently looking at, and expose only that single row to the Min-Heap:
+
+```c
+typedef struct {
+    size_t part_id;
+    column_reader_t **readers;     // Array of readers (one per column)
+    
+    // Vectorized Granule Cache
+    slice_i32_t *current_granules; // Array of slices (one per column)
+    size_t row_idx;                // Which row in the granule are we at? (0 to 8191)
+    
+    // The single row exposed to the Min-Heap
+    int32_t current_key;           // Col 0
+    int32_t *current_values;       // Cols 1..N
+} part_stream_t;
+```
+
+**How it works:**
+1. You fetch a full granule for every column.
+2. You set `row_idx = 0`.
+3. You pull `current_granules[0].data[0]` into `current_key`, and push to the Min-Heap.
+4. When the Min-Heap pops this stream, you write the row. Then you `row_idx++`. 
+5. If `row_idx < current_granules[0].len`, you just grab the next row from RAM and push back to the heap!
+6. If `row_idx == current_granules[0].len`, you exhausted the chunk in RAM. You must call `column_reader_next_granule_i32` again to hit the disk.
+
+#### 9. Opening the Files (Vectorized Initialization)
+
+Here is the exact structural C code to initialize this vectorized structure correctly inside `part_merger_execute`:
+
+```c
+// ==========================================
+// OUTSIDE THE LOOP (Global Setup)
+// ==========================================
+size_t total_parts;
+table_part_t **parts = table_get_parts(merger->table, &total_parts);
+
+part_stream_t *streams = malloc(sizeof(part_stream_t) * merger->num_parts);
+min_heap_t *heap = min_heap_create(merger->num_parts);
+size_t num_cols = merger->table->schema->count;
+
+// ==========================================
+// INSIDE THE LOOP (Per-Part Setup)
+// ==========================================
+for (size_t i = 0; i < merger->num_parts; i++) {
+    
+    // 1. Get the path to this specific part directory on disk
+    size_t part_id = merger->part_ids_to_merge[i];
+    streams[i].part_id = part_id;
+    const char* part_path = parts[part_id]->part_path; 
+
+    // 2. Allocate the arrays (Notice we allocate POINTERS for readers)
+    streams[i].readers = malloc(sizeof(column_reader_t*) * num_cols);
+    streams[i].current_granules = malloc(sizeof(slice_i32_t) * num_cols);
+    streams[i].current_values = malloc(sizeof(int32_t) * (num_cols - 1));
+
+    // 3. Create a reader and immediately read the FIRST GRANULE for every column
+    for (size_t col = 0; col < num_cols; col++) {
+        streams[i].readers[col] = column_reader_create(
+            part_path, 
+            merger->table->schema->columns[col].name, 
+            merger->table->schema->columns[col].type,
+            NULL // No sparse index mask for compaction
+        );
+        streams[i].current_granules[col] = column_reader_next_granule_i32(streams[i].readers[col]);
+    }
+
+    // 4. If the first column's granule has data, extract Row 0 and push to heap!
+    if (streams[i].current_granules[0].len > 0) {
+        streams[i].row_idx = 0;
+        streams[i].current_key = streams[i].current_granules[0].data[0]; // Sort Key (Col 0)
+        
+        // Extract the rest of the columns
+        for (size_t col = 1; col < num_cols; col++) {
+            streams[i].current_values[col - 1] = streams[i].current_granules[col].data[0];
+        }
+        
+        min_heap_push(heap, streams[i].current_key, &streams[i]);
+    }
+}
+```
+
+#### 10. The Vectorized Merge Loop
+Once the Min-Heap is seeded with Row 0 from every part, we enter the main merge loop. 
+
+Because we are vectorized, we don't hit the disk on every single row! We only call `column_reader_next_granule_i32` when our `row_idx` reaches the end of the 8,192-row `slice_i32_t` chunk.
+
+Here is the exact structural logic for the `while` loop (which goes directly beneath the setup block above):
+
+```c
+// ==========================================
+// THE MERGE LOOP
+// ==========================================
+heap_node_t min_node;
+
+while (min_heap_pop(heap, &min_node)) {
+    // 1. Get the stream that holds the smallest key
+    part_stream_t* stream = (part_stream_t*)min_node.payload;
+    
+    // 2. Buffer the row for writing (Batching logic omitted for brevity)
+    // out_keys[out_row_count] = stream->current_key;
+    // out_vals[out_row_count] = stream->current_values[0];
+    // out_row_count++;
+    
+    // 3. Advance the stream to the next row in the RAM chunk
+    stream->row_idx++;
+    
+    // 4. Did we exhaust the 8,192-row chunk? If so, fetch the next one from disk!
+    if (stream->row_idx >= stream->current_granules[0].len) {
+        for (size_t col = 0; col < num_cols; col++) {
+            stream->current_granules[col] = column_reader_next_granule_i32(stream->readers[col]);
+        }
+        stream->row_idx = 0; // Reset index for the newly fetched chunk
+    }
+    
+    // 5. If we have data (either from the old chunk or the new one), re-queue to the heap!
+    if (stream->current_granules[0].len > 0) {
+        // Extract the Key (Col 0) for this new row
+        stream->current_key = stream->current_granules[0].data[stream->row_idx];
+        
+        // Extract the Values (Cols 1..N) for this new row
+        for (size_t col = 1; col < num_cols; col++) {
+            stream->current_values[col - 1] = stream->current_granules[col].data[stream->row_idx];
+        }
+        
+        min_heap_push(heap, stream->current_key, stream);
+    }
+}
+```
+
+#### 11. Refactoring the Fetch Logic (Loop Priming & The Calloc Trick)
+If you look closely at Sections 9 and 10, you'll notice a classic "code smell": the logic to check if a chunk is empty, fetch a new one, extract the values, and push to the heap is duplicated! It happens once in the initialization loop to "prime" the heap, and again inside the `while` loop.
+
+We can DRY (Don't Repeat Yourself) this code by extracting it into a helper function:
+
+```c
+static void stream_fetch_next_and_push(part_stream_t* stream, min_heap_t* heap, size_t num_cols) {
+    if (stream->row_idx >= stream->current_granules[0].len) {
+        for (size_t j = 0; j < num_cols; j++) {
+            stream->current_granules[j] = column_reader_next_granule_i32(stream->readers[j]);
+        }
+        stream->row_idx = 0;
+    }
+
+    if (stream->current_granules[0].len > 0) {
+        for (size_t j = 0; j < num_cols; j++) {
+            stream->current_values[j] = stream->current_granules[j].data[stream->row_idx];
+        }
+        stream->current_key = stream->current_values[0];
+        min_heap_push(heap, stream->current_key, stream);
+    }
+}
+```
+
+**The `calloc` Trick:** For this helper to work during the *initialization* phase, `stream->current_granules[0].len` must be `0` so the `if` statement triggers a disk read. If you allocate `current_granules` using `malloc`, `len` might be filled with garbage memory (e.g., `99,999`), which bypasses the read and crashes the heap! 
+By using `calloc(sizeof(slice_i32_t), num_cols)` during setup, the memory is naturally zero-initialized, guaranteeing `len` is `0`.
+
+#### 12. Memory Cleanup & Flushing Writers
+C requires explicit cleanup. At the end of `part_merger_execute`, you must not only free the memory but also ensure the OS buffers for the new part are fully flushed to disk.
+
+1. **Close the Writers:** Loop through your writers array and call `column_writer_close(writers[j])`. If you skip this, the file footers/indexes won't be written, and data will be lost.
+2. **Clean the Streams:** Create a quick helper like `part_stream_free(part_stream_t* stream)` that loops through `stream->readers` calling `column_reader_free`, and then frees the internal structs.
+3. **Clean the Engine:** Free the `writers` array, the `streams` array, and call `min_heap_destroy(heap)`.
+
+#### 13. Garbage Collection & The Background Daemon
+Right now, `part_merger_execute` removes the old $K$ parts from the active catalog (`table->parts`), turning them into **Zombies**. However, it doesn't delete them from the hard drive!
+In a production database, a background daemon handles garbage collection. Since our compactor runs in its own background daemon thread anyway, we can do the garbage collection right inside the execution!
+
+**The Daemon Thread**
+When creating a POSIX thread, the `pthread_create` API demands a function with a very specific signature: `void* my_func(void* arg)`. 
+
+```c
+void* table_background_compactor_thread(void* arg) {
+    table_t* table = (table_t*)arg;
+    merge_config_t config = {
+        .max_parts_to_merge = 10,
+        .min_rows_to_merge = 50000,
+        .force_merge_all = false
+    };
+
+    while(1) {
+        sleep(5); // Wake up every 5 seconds
+        
+        part_merger_t* merger = part_merger_create(table, config);
+        part_merger_execute(merger);
+        part_merger_destroy(merger);
+    }
+    return NULL;
+}
+```
+
+**The Fast-Path Optimization (in `part_merger_create`)**
+To prevent the daemon from triggering expensive `malloc` and `qsort` operations every 5 seconds on an idle database, we move the fast-path check to the very top of `part_merger_create`:
+
+```c
+part_merger_t *part_merger_create(table_t *table, merge_config_t config) {
+    // 1. FAST-PATH: Don't do heavy allocations if the table is idle!
+    pthread_rwlock_rdlock(&table->catalog_lock);
+    size_t current_parts = table->num_parts;
+    pthread_rwlock_unlock(&table->catalog_lock);
+
+    part_merger_t *merger = malloc(sizeof(*merger));
+    merger->config = config;
+    merger->table = table;
+    merger->num_parts = 0; // Default to empty
+    merger->part_ids_to_merge = NULL;
+
+    if (!config.force_merge_all && current_parts < config.max_parts_to_merge) {
+        return merger; // Abort early! No heavy lifting!
+    }
+
+    // 2. SLOW-PATH: Actually grab the parts and sort them
+    size_t num_parts;
+    table_part_t **parts = table_get_parts(table, &num_parts);
+    // ... (rest of the qsort and merging setup) ...
+}
+```
+
+**The Zombie GC Loop**
+Since the background thread only has access to the generic `table_t`, we can handle the GC directly at the bottom of `part_merger_execute`. We just save the old pointers before the atomic swap, and then wait for their refcounts to drop!
+
+```c
+    // 1. Save the Zombies before we overwrite the table array!
+    table_part_t **zombies = malloc(sizeof(table_part_t*) * merger->num_parts);
+    for (size_t i = 0; i < merger->num_parts; i++) {
+        zombies[i] = merger->table->parts[merger->part_ids_to_merge[i]];
+    }
+
+    // 2. Do the Atomic Swap of table->parts here!
+
+    // 3. Zombie Garbage Collection
+    for (size_t i = 0; i < merger->num_parts; i++) {
+        while (atomic_load(&zombies[i]->refcount) > 0) usleep(1000); 
+        // unlink(zombies[i]->part_path);
+        free(zombies[i]); 
+    }
+    free(zombies);
+```

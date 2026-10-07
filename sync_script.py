@@ -87,10 +87,10 @@ To maintain a lean implementation targeted under 2,500 lines of C11, `simpledb` 
 """
 
 # Day 1
-day1_body = read_local('/Users/dmanchon/repos/simpledb/day1.md')
+day1_body = read_local('/Users/dmanchon/repos/cdb/day1.md')
 
 # Day 2
-day2_body = read_local('/Users/dmanchon/repos/simpledb/day2.md')
+day2_body = read_local('/Users/dmanchon/repos/cdb/day2.md')
 # Extra fixes to Day 2 for style
 day2_body = day2_body.replace(
     "In an analytical engine scanning 100 million rows, copying column vectors introduces tens of milliseconds of latency and wastes hundreds of megabytes of memory bandwidth.",
@@ -98,7 +98,7 @@ day2_body = day2_body.replace(
 )
 
 # Day 3
-day3_body = read_local('/Users/dmanchon/repos/simpledb/day3.md')
+day3_body = read_local('/Users/dmanchon/repos/cdb/day3.md')
 day3_body = day3_body.replace(
     "Disk I/O represents the primary performance bottleneck in columnar storage engines. In `simpledb`, memory-mapped files (`mmap`) eliminate kernel-to-user buffer copies, exposing binary column files directly as typed slices.",
     "Disk I/O is a significant cost in columnar storage engines. `simpledb` uses memory-mapped files (`mmap`) to bypass kernel-to-user buffer copies, exposing binary column files directly as typed slices."
@@ -106,33 +106,33 @@ day3_body = day3_body.replace(
 day3_body = day3_body.replace("automated kernel read-ahead", "automated kernel read ahead")
 
 
-write_local('/Users/dmanchon/repos/simpledb/day0.md', day0_body)
-write_local('/Users/dmanchon/repos/simpledb/day1.md', day1_body)
-write_local('/Users/dmanchon/repos/simpledb/day2.md', day2_body)
-write_local('/Users/dmanchon/repos/simpledb/day3.md', day3_body)
+write_local('/Users/dmanchon/repos/cdb/day0.md', day0_body)
+write_local('/Users/dmanchon/repos/cdb/day1.md', day1_body)
+write_local('/Users/dmanchon/repos/cdb/day2.md', day2_body)
+write_local('/Users/dmanchon/repos/cdb/day3.md', day3_body)
 
 # Day 13
-day13_body = read_local('/Users/dmanchon/repos/simpledb/day13.md')
-write_local('/Users/dmanchon/repos/simpledb/day13.md', day13_body)
+day13_body = read_local('/Users/dmanchon/repos/cdb/day13.md')
+write_local('/Users/dmanchon/repos/cdb/day13.md', day13_body)
 
 # Day 14
-day14_body = read_local('/Users/dmanchon/repos/simpledb/day14.md')
-write_local('/Users/dmanchon/repos/simpledb/day14.md', day14_body)
+day14_body = read_local('/Users/dmanchon/repos/cdb/day14.md')
+write_local('/Users/dmanchon/repos/cdb/day14.md', day14_body)
 
 # Day 14 Bis
-day14bis_body = read_local('/Users/dmanchon/repos/simpledb/day14bis.md') if os.path.exists('/Users/dmanchon/repos/simpledb/day14bis.md') else ""
+day14bis_body = read_local('/Users/dmanchon/repos/cdb/day14bis.md') if os.path.exists('/Users/dmanchon/repos/cdb/day14bis.md') else ""
 if day14bis_body:
-    write_local('/Users/dmanchon/repos/simpledb/day14bis.md', day14bis_body)
+    write_local('/Users/dmanchon/repos/cdb/day14bis.md', day14bis_body)
 
 # Day 15
-day15_body = read_local('/Users/dmanchon/repos/simpledb/day15.md') if os.path.exists('/Users/dmanchon/repos/simpledb/day15.md') else ""
+day15_body = read_local('/Users/dmanchon/repos/cdb/day15.md') if os.path.exists('/Users/dmanchon/repos/cdb/day15.md') else ""
 if day15_body:
-    write_local('/Users/dmanchon/repos/simpledb/day15.md', day15_body)
+    write_local('/Users/dmanchon/repos/cdb/day15.md', day15_body)
 
 # Day 16
-day16_body = read_local('/Users/dmanchon/repos/simpledb/day16.md') if os.path.exists('/Users/dmanchon/repos/simpledb/day16.md') else ""
+day16_body = read_local('/Users/dmanchon/repos/cdb/day16.md') if os.path.exists('/Users/dmanchon/repos/cdb/day16.md') else ""
 if day16_body:
-    write_local('/Users/dmanchon/repos/simpledb/day16.md', day16_body)
+    write_local('/Users/dmanchon/repos/cdb/day16.md', day16_body)
 
 # Update Astro files
 astro_dir = '/Users/dmanchon/repos/astro-blog/src/content/blog'
@@ -161,7 +161,7 @@ if day16_body:
             f.write('---\ntitle: "Day 16: Partitioned Grace Hash Aggregation (Disk Spilling GROUP BY)"\npubDate: 2026-08-30\ndescription: "Implementing partitioned grace hash aggregation for high-cardinality GROUP BY with bounded memory."\n---\n\n')
     update_file(day16_path, day16_body)
 
-day17_body = read_local('/Users/dmanchon/repos/simpledb/day17.md') if os.path.exists('/Users/dmanchon/repos/simpledb/day17.md') else ""
+day17_body = read_local('/Users/dmanchon/repos/cdb/day17.md') if os.path.exists('/Users/dmanchon/repos/cdb/day17.md') else ""
 if day17_body:
     day17_path = f'{astro_dir}/day17.md'
     if not os.path.exists(day17_path):
@@ -169,7 +169,7 @@ if day17_body:
             f.write('---\ntitle: "Day 17: The Multi-Part Table Scanner (Lazy Data Loading & Granule Pruning)"\npubDate: 2026-08-31\ndescription: "Building a Volcano-model Table Scanner to stream data from disk parts and memory buffers."\n---\n\n')
     update_file(day17_path, day17_body)
 
-day18_body = read_local('/Users/dmanchon/repos/simpledb/day18.md') if os.path.exists('/Users/dmanchon/repos/simpledb/day18.md') else ""
+day18_body = read_local('/Users/dmanchon/repos/cdb/day18.md') if os.path.exists('/Users/dmanchon/repos/cdb/day18.md') else ""
 if day18_body:
     day18_path = f'{astro_dir}/day18.md'
     if not os.path.exists(day18_path):
@@ -177,7 +177,7 @@ if day18_body:
             f.write('---\ntitle: "Day 18: APL / K Vectorized Physical Execution Pipeline"\npubDate: 2026-09-01\ndescription: "Assembling execution pipeline executing scan, filter, gather, aggregate."\n---\n\n')
     update_file(day18_path, day18_body)
 
-day19_body = read_local('/Users/dmanchon/repos/simpledb/day19.md') if os.path.exists('/Users/dmanchon/repos/simpledb/day19.md') else ""
+day19_body = read_local('/Users/dmanchon/repos/cdb/day19.md') if os.path.exists('/Users/dmanchon/repos/cdb/day19.md') else ""
 if day19_body:
     day19_path = f'{astro_dir}/day19.md'
     if not os.path.exists(day19_path):

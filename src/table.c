@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/_pthread/_pthread_rwlock_t.h>
+#include <sys/stat.h>
 
 table_t *table_create(const char *name) {
     table_t *table = malloc(sizeof(*table));
@@ -24,6 +25,7 @@ table_t *table_create(const char *name) {
     table->parts = NULL;
     table->schema = NULL;
     table->fts = NULL;
+    table->next_block_id = 1;
 
     pthread_rwlock_init(&table->catalog_lock, NULL);
 
@@ -149,11 +151,17 @@ int table_flush(table_t *table, const char *data_dir) {
         return 0; // Nothing to flush
     }
 
+    uint64_t block_id = table->next_block_id++;
+    char part_name[256];
+    table_part_format_name(part_name, sizeof(part_name), data_dir, block_id, block_id, 0);
+    mkdir(data_dir, 0777);
+    mkdir(part_name, 0777);
+
     for (size_t i = 0; i < table->schema->count; i++) {
         if (!table->column_buffers[i])
             continue;
 
-        column_writer_t *writer = column_writer_create(data_dir, table->schema->columns[i].name,
+        column_writer_t *writer = column_writer_create(part_name, table->schema->columns[i].name,
                                                        table->schema->columns[i].type);
         switch (table->schema->columns[i].type) {
         case COL_TYPE_I32:
@@ -169,8 +177,8 @@ int table_flush(table_t *table, const char *data_dir) {
             column_writer_append(writer, col->keys_buf->data, table->row_count);
             col->keys_buf->size = 0;
             // then write the original strings
-            char dict_path[256];
-            snprintf(dict_path, sizeof(dict_path), "%s/%s.dict", data_dir,
+            char dict_path[512];
+            snprintf(dict_path, sizeof(dict_path), "%s/%s.dict", part_name,
                      table->schema->columns[i].name);
             FILE *dfp = fopen(dict_path, "wb");
             if (!dfp) {
@@ -206,9 +214,12 @@ int table_flush(table_t *table, const char *data_dir) {
     table_part_t *part = malloc(sizeof(table_part_t));
     if (!part)
         return -1;
-    strncpy(part->part_path, data_dir, sizeof(part->part_path) - 1);
+    strncpy(part->part_path, part_name, sizeof(part->part_path) - 1);
     part->part_path[sizeof(part->part_path) - 1] = '\0';
     part->row_count = table->row_count;
+    part->min_block = block_id;
+    part->max_block = block_id;
+    part->level = 0;
     table->parts[table->num_parts++] = part;
     table->row_count = 0;
     atomic_init(&part->refcount, 0);

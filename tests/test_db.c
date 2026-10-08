@@ -702,11 +702,13 @@ static void test_table_flush_e2e(void) {
     batch[2] = (const void *)countries;
     batch[3] = (const void *)comments;
 
-    assert(table_insert_batch(table, (const void ***)batch, 4, 3) == 0);
+    int rc_batch = table_insert_batch(table, (const void ***)batch, 4, 3);
+    assert(rc_batch == 0);
     assert(table->row_count == 3);
 
     // 3. Flush in-memory data to disk
-    assert(table_flush(table, ".") == 0);
+    int rc_flush2 = table_flush(table, ".");
+    assert(rc_flush2 == 0);
 
     // 4. Assert in-memory buffer was reset
     assert(table->row_count == 0);
@@ -1102,8 +1104,10 @@ void test_part_merger(void) {
     batch1[0] = (const void*)users1;
     batch1[1] = (const void*)amounts1;
     
-    assert(table_insert_batch(table, (const void ***)batch1, 2, 2) == 0);
-    assert(table_flush(table, ".") == 0); // Creates part 0
+    int rc_batch1 = table_insert_batch(table, (const void ***)batch1, 2, 2);
+    assert(rc_batch1 == 0);
+    int rc_flush1 = table_flush(table, ".");
+    assert(rc_flush1 == 0); // Creates part 0
     
     // 3. Insert Data and Flush to create Part 2 (simulate batch 2)
     int32_t users2[] = {3, 4};
@@ -1112,8 +1116,10 @@ void test_part_merger(void) {
     batch2[0] = (const void*)users2;
     batch2[1] = (const void*)amounts2;
     
-    assert(table_insert_batch(table, (const void ***)batch2, 2, 2) == 0);
-    assert(table_flush(table, ".") == 0); // Creates part 1
+    int rc_batch2 = table_insert_batch(table, (const void ***)batch2, 2, 2);
+    assert(rc_batch2 == 0);
+    int rc_flush2 = table_flush(table, ".");
+    assert(rc_flush2 == 0); // Creates part 1
     
     // Assume part 0 and part 1 are now immutable parts on disk.
     // Let's verify we have exactly 2 parts.

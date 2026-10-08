@@ -15,6 +15,11 @@ typedef struct table_part_t {
     char part_path[256];
     size_t row_count;
 
+    // ClickHouse MergeTree Naming Convention
+    uint64_t min_block;
+    uint64_t max_block;
+    uint32_t level;
+
     // Atomic reference count for concurrent readers (0 = safe to delete)
     _Atomic size_t refcount;
 } table_part_t;
@@ -35,6 +40,9 @@ typedef struct table_t {
     // Track flushed parts (for the Read API)
     table_part_t **parts;
     size_t num_parts;
+
+    // Monotonic block sequence for ClickHouse-style part naming
+    uint64_t next_block_id;
 
     // Optional FTS index for text columns
     inverted_index_t *fts;
@@ -99,5 +107,10 @@ void table_release_parts(table_part_t **parts, size_t num_parts);
 
 // Retrieve the active in-memory columnar buffers
 void **table_get_active_buffer(table_t *table, size_t *out_row_count);
+
+#include <stdio.h>
+static inline void table_part_format_name(char *buf, size_t buf_size, const char *base_dir, uint64_t min_block, uint64_t max_block, uint32_t level) {
+    snprintf(buf, buf_size, "%s/all_%llu_%llu_%u", base_dir, (unsigned long long)min_block, (unsigned long long)max_block, (unsigned)level);
+}
 
 #endif // SIMPLEDB_TABLE_H

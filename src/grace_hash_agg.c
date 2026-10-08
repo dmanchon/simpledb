@@ -159,7 +159,7 @@ bool grace_hash_agg_next(grace_hash_agg_t *agg, agg_output_record_t *out_record)
 
                 agg_output_record_t new = {
                     .count_value = 1, .sum_value = in.agg_value, .group_key = in.group_key};
-                printf("Added to hash table size=%zu group=%d\n", agg->hash_table_size, new.group_key); agg->current_hash_table[agg->hash_table_size++] = new;
+                agg->current_hash_table[agg->hash_table_size++] = new;
             }
         };
         fclose(agg->partition_files[agg->current_partition_idx]);

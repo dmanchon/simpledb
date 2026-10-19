@@ -18,12 +18,15 @@
 #include "simpledb/table_scanner.h"
 #include "simpledb/exec_pipeline.h"
 #include "simpledb/part_merger.h"
+#include "simpledb/sql_parser.h"
 #include <time.h>
+#undef NDEBUG
 #include <assert.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void test_allocator(void) {
     void* ptr = aligned_malloc(1024);
@@ -733,26 +736,31 @@ static void test_table_flush_e2e(void) {
     assert(parts[0]->row_count == 3);
     (void)parts;
 
-    // 7. Verify serialized files exist on disk
-    FILE *f_user_id = fopen("./user_id.bin", "rb");
+    // 7. Verify serialized files exist on disk inside the part directory
+    FILE *f_user_id = fopen("./all_1_1_0/user_id.bin", "rb");
     assert(f_user_id != NULL);
     fclose(f_user_id);
 
-    FILE *f_country_dict = fopen("./country.dict", "rb");
+    FILE *f_country_dict = fopen("./all_1_1_0/country.dict", "rb");
     assert(f_country_dict != NULL);
     fclose(f_country_dict);
 
-    FILE *f_comment_strings = fopen("./comment.strings", "rb");
+    FILE *f_comment_strings = fopen("./all_1_1_0/comment.strings", "rb");
     assert(f_comment_strings != NULL);
     fclose(f_comment_strings);
 
     // Cleanup generated disk files
-    remove("./user_id.bin");
-    remove("./score.bin");
-    remove("./country.bin");
-    remove("./country.dict");
-    remove("./comment.bin");
-    remove("./comment.strings");
+    remove("./all_1_1_0/user_id.bin");
+    remove("./all_1_1_0/user_id.idx");
+    remove("./all_1_1_0/score.bin");
+    remove("./all_1_1_0/score.idx");
+    remove("./all_1_1_0/country.bin");
+    remove("./all_1_1_0/country.idx");
+    remove("./all_1_1_0/country.dict");
+    remove("./all_1_1_0/comment.bin");
+    remove("./all_1_1_0/comment.idx");
+    remove("./all_1_1_0/comment.strings");
+    remove("./all_1_1_0");
 
     table_destroy(table);
     printf("Table Flush E2E tests passed!\n");
@@ -938,6 +946,7 @@ static void test_grace_hash_agg(void) {
     assert(out_count == 10); // 10 unique groups
 
     grace_hash_agg_destroy(agg);
+    remove("test_grace_agg_tmp");
     free(records);
     printf("Grace Hash Aggregation tests passed!\n");
 }
@@ -1144,8 +1153,96 @@ void test_part_merger(void) {
     
     // 6. Cleanup
     table_destroy(table);
+    remove("./all_1_1_0/user_id.bin");
+    remove("./all_1_1_0/amount.bin");
+    remove("./all_1_1_0");
+    remove("./all_2_2_0/user_id.bin");
+    remove("./all_2_2_0/amount.bin");
+    remove("./all_2_2_0");
+    remove("events_merge_test/all_1_2_1/user_id.bin");
+    remove("events_merge_test/all_1_2_1/amount.bin");
+    remove("events_merge_test/all_1_2_1");
+    remove("events_merge_test");
     
     printf("Day 19 MergeTree Part Compactor test passed!\n");
+}
+
+static void test_sql_parser(void) {
+    // 1. Test SELECT with projection, aggregate, alias, WHERE, GROUP BY, and ORDER BY DESC
+    {
+        const char* query = "SELECT user_id, sum(amount) AS total FROM events WHERE amount > 100 GROUP BY user_id ORDER BY total DESC;";
+        sql_parser_t parser = sql_parser_create(query);
+        ast_query_t ast = {0};
+
+        bool ok = sql_parser_parse(&parser, &ast);
+        assert(ok);
+        (void)ok;
+        assert(ast.stmt_type == STMT_SELECT);
+
+        assert(strcmp(ast.table_name, "events") == 0);
+        assert(ast.num_select_exprs == 2);
+        assert(ast.select_exprs[0].type == AST_PROJECTION);
+        assert(strcmp(ast.select_exprs[0].column_name, "user_id") == 0);
+
+        assert(ast.select_exprs[1].type == AST_AGG_SUM);
+        assert(strcmp(ast.select_exprs[1].column_name, "amount") == 0);
+        assert(strcmp(ast.select_exprs[1].alias, "total") == 0);
+
+        assert(ast.num_predicates == 1);
+        assert(strcmp(ast.predicates[0].column_name, "amount") == 0);
+        assert(ast.predicates[0].op == OP_GREATER_THAN);
+        assert(ast.predicates[0].int_val == 100);
+
+        assert(ast.has_group_by);
+        assert(strcmp(ast.group_by_col, "user_id") == 0);
+
+        assert(ast.has_order_by);
+        assert(strcmp(ast.order_by_col, "total") == 0);
+        assert(ast.order_desc == true);
+    }
+
+    // 2. Test Single-Row INSERT ... VALUES
+    {
+        const char* query = "INSERT INTO events (user_id, status) VALUES (42, 'SUCCESS');";
+        sql_parser_t parser = sql_parser_create(query);
+        ast_query_t ast = {0};
+
+        bool ok = sql_parser_parse(&parser, &ast);
+        assert(ok);
+        (void)ok;
+        assert(ast.stmt_type == STMT_INSERT);
+
+        assert(strcmp(ast.table_name, "events") == 0);
+
+        assert(ast.num_insert_cols == 2);
+        assert(strcmp(ast.insert_cols[0], "user_id") == 0);
+        assert(strcmp(ast.insert_cols[1], "status") == 0);
+
+        assert(ast.num_insert_vals == 2);
+        assert(ast.insert_vals[0].is_string == false);
+        assert(ast.insert_vals[0].int_val == 42);
+
+        assert(ast.insert_vals[1].is_string == true);
+        assert(strcmp(ast.insert_vals[1].string_val, "SUCCESS") == 0);
+    }
+
+    // 3. Test Bulk JSON INSERT ... FROM
+    {
+        const char* query = "INSERT INTO events FROM 'events_data.json';";
+        sql_parser_t parser = sql_parser_create(query);
+        ast_query_t ast = {0};
+
+        bool ok = sql_parser_parse(&parser, &ast);
+        assert(ok);
+        (void)ok;
+        assert(ast.stmt_type == STMT_INSERT);
+
+        assert(strcmp(ast.table_name, "events") == 0);
+        assert(ast.is_bulk_insert == true);
+        assert(strcmp(ast.from_file_path, "events_data.json") == 0);
+    }
+
+    printf("Day 20 SQL Parser tests passed (SELECT, INSERT, & Bulk JSON)!\n");
 }
 
 int main(void) {
@@ -1179,6 +1276,7 @@ int main(void) {
     test_table_scanner();
     test_exec_pipeline();
     test_part_merger();
+    test_sql_parser();
 
     printf("SUCCESS: All C11 unit tests passed!\n");
     return 0;

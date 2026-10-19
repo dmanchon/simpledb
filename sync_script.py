@@ -185,6 +185,14 @@ if day19_body:
             f.write('---\ntitle: "Day 19: The MergeTree Part Compactor"\npubDate: 2026-09-02\ndescription: "Merging multiple immutable on-disk parts into a single consolidated, deduplicated part."\n---\n\n')
     update_file(day19_path, day19_body)
 
+day20_body = read_local('/Users/dmanchon/repos/cdb/day20.md') if os.path.exists('/Users/dmanchon/repos/cdb/day20.md') else ""
+if day20_body:
+    day20_path = f'{astro_dir}/day20.md'
+    if not os.path.exists(day20_path):
+        with open(day20_path, 'w') as f:
+            f.write('---\ntitle: "Day 20: Minimal SQL & K/q Query Parser & REPL CLI"\npubDate: 2026-09-03\ndescription: "Building a recursive descent SQL parser and an interactive REPL shell in C11."\n---\n\n')
+    update_file(day20_path, day20_body)
+
 print("Done")
 
 

@@ -190,8 +190,16 @@ if day20_body:
     day20_path = f'{astro_dir}/day20.md'
     if not os.path.exists(day20_path):
         with open(day20_path, 'w') as f:
-            f.write('---\ntitle: "Day 20: Minimal SQL & K/q Query Parser & REPL CLI"\npubDate: 2026-09-03\ndescription: "Building a recursive descent SQL parser and an interactive REPL shell in C11."\n---\n\n')
+            f.write('---\ntitle: "Day 20: Minimal SQL & Query Parser (Lexer, Recursive Descent & AST)"\npubDate: 2026-09-03\ndescription: "Building an analytical SQL Lexer, recursive descent parser, and Abstract Syntax Tree (AST) in C11."\n---\n\n')
     update_file(day20_path, day20_body)
+
+day21_body = read_local('/Users/dmanchon/repos/cdb/day21.md') if os.path.exists('/Users/dmanchon/repos/cdb/day21.md') else ""
+if day21_body:
+    day21_path = f'{astro_dir}/day21.md'
+    if not os.path.exists(day21_path):
+        with open(day21_path, 'w') as f:
+            f.write('---\ntitle: "Day 21: The Interactive REPL CLI & Query Engine"\npubDate: 2026-09-04\ndescription: "Building an interactive analytical database REPL, dynamic schema inference, streaming NDJSON ingestion with yyjson, and vectorized query execution."\n---\n\n')
+    update_file(day21_path, day21_body)
 
 print("Done")
 

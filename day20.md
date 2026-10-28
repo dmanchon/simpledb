@@ -1,24 +1,25 @@
-# Day 20: Minimal SQL & K/q Query Parser & REPL CLI
+# Day 20: Minimal SQL & Query Parser (Lexer, Recursive Descent & AST)
 
 Welcome to Day 20! Over the past 19 days, we have built a fully functional, highly optimized, vectorized columnar analytical database engine from scratch in C11. We have zero-copy memory mapping, SIMD vectorized filtering, high-cardinality dictionaries, free-text search, disk-spilling hash aggregations, and background compaction.
 
-But right now, the only way to interact with `simpledb` is by writing C code and compiling it. A database is only as good as its interface. Today, we build the final piece: a **Query Parser** and an interactive **REPL (Read-Eval-Print Loop) CLI**.
+But up to this point, interacting with `simpledb` has required writing raw C unit tests and linking directly against the internal engine APIs. A database needs an accessible query language. Today, we build the query front-end: a **Lexer**, a **Recursive Descent Parser**, and an **Abstract Syntax Tree (AST)** for SQL queries.
 
-## The Goal: A Minimal SQL & K/q Dialect
+## The Goal: A Minimal Analytical SQL Dialect
 
-We want to support a subset of SQL, combined with the array-oriented syntax of K/q (from our Day 4 APL inspirations).
+We want to support an expressive analytical subset of SQL, combined with the array-oriented brevity inspired by K/q (from our Day 4 APL inspirations).
 Our parser will understand queries like:
 
 ```sql
-SELECT user_id, sum(amount) FROM events WHERE amount > 100 GROUP BY user_id;
+SELECT user_id, sum(amount) FROM events WHERE amount > 100 GROUP BY user_id ORDER BY user_id DESC;
 INSERT INTO events (user_id, status) VALUES (42, 'SUCCESS');
 INSERT INTO events FROM 'data.json';
 ```
 
-We will build this in three stages:
-1. **The Lexer (`sql_lexer_t`)**: Scans the raw string and breaks it into tokens (e.g., `SELECT`, `INSERT`, `IDENTIFIER("user_id")`, `COMMA`, `NUMBER(100)`).
-2. **The Parser (`sql_parser_t`)**: Consumes the tokens and builds an Abstract Syntax Tree (AST) representing the logical query plan.
-3. **The REPL (`repl_t`)**: An interactive command-line loop that reads user input, parses it, executes it using our physical execution pipeline (Day 18) or ingestion pipeline (Day 14), and prints the results in a nicely formatted ASCII table in under 50 milliseconds!
+We build this in two core stages:
+1. **The Lexer (`sql_lexer_t`)**: Scans the raw SQL query string and emits strongly typed tokens (e.g., `SELECT`, `INSERT`, `IDENTIFIER("user_id")`, `COMMA`, `NUMBER(100)`, `STRING('SUCCESS')`).
+2. **The Parser (`sql_parser_t`)**: An LL(1) recursive descent parser with 1-token lookahead that consumes tokens and builds a clean `ast_query_t` representing projections, aggregate functions (`SUM`, `COUNT`, `MAX`, `MIN`), aliases (`AS`), filter predicates (`WHERE`), and `GROUP BY` / `ORDER BY` clauses.
+
+In **Day 21**, we will take this parser and connect it to an interactive terminal REPL shell, dynamic schema inference, streaming NDJSON ingestion with `yyjson`, and vectorized query execution!
 
 ## The Theory: Lexers vs. Parsers
 
@@ -257,24 +258,6 @@ typedef struct {
 
 sql_parser_t sql_parser_create(const char* query);
 bool sql_parser_parse(sql_parser_t* parser, ast_query_t* out_query);
-```
-
-### `include/simpledb/repl.h`
-
-```c
-#pragma once
-
-#include "simpledb/table.h"
-#include <stdbool.h>
-
-typedef struct {
-    table_t* current_db; // For now, the REPL only holds one table open
-    bool running;
-} repl_t;
-
-repl_t repl_create(table_t* initial_db);
-void repl_run(repl_t* repl);
-void repl_destroy(repl_t* repl);
 ```
 
 ## 2. Mocking and Testing
@@ -932,32 +915,365 @@ static bool sql_parser_parse_insert(sql_parser_t *parser, ast_query_t *out_query
 }
 ```
 
-### Handling INSERT in the REPL
-For the REPL, use a `while (repl->running)` loop, read from `stdin` using `getline()`, parse the query, and call the execution engine.
-For `INSERT` statements, first check `ast.is_bulk_insert`. 
+## 3. The Final Listing: `src/sql_parser.c`
 
-**1. Bulk JSON Ingestion:**
-If it is a bulk insert (e.g. `INSERT INTO events FROM 'data.json'`), you can reuse your schema registry parser from Day 7! Simply `fopen()` the file, read the JSON rows into columnar buffers, and loop `table_insert_column_i32` / `table_insert_column_dict` to ingest millions of rows rapidly.
+Here is the complete, self-contained implementation of the SQL Lexer, recursive descent parser, and AST generator:
 
-**2. Single Row Ingestion:**
-If it is a standard `INSERT VALUES`, you will iterate over `ast.insert_cols`. Depending on the schema type of that column, you must parse `ast.insert_vals` and write it to our columnar ingestion buffers:
-- If it's an integer, map the single value to a temporary `buffer_i32_t` of size 1 and call `table_insert_column_i32(repl->current_db, col_name, &temp_buf)`.
-- If it's a string, call `table_insert_column_dict(...)`.
+```c
+#include "simpledb/sql_parser.h"
+#include <ctype.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
 
-**Important Architectural Note: Are Inserts Parts?**
-A common question when building a MergeTree engine is: *Does every single `INSERT` create a new part on disk?*
-If it did, doing 10,000 single-row `INSERT` statements would create 10,000 tiny files, rapidly crashing the OS with "Too many open files" (despite our Day 19 compactor trying to keep up).
-Because we use **Late Materialization** (from Day 14), our `table_insert_column_*` functions only append to active, mutable **RAM buffers** inside the `table_t` struct. An `INSERT` does not become a physical, immutable disk part until we explicitly call `table_flush(table)`. In a real system, the REPL or ingestion coordinator would only trigger a `table_flush` when the memory buffers exceed a certain size (e.g., 100MB) or a timeout expires.
+sql_lexer_t sql_lexer_create(const char *query) {
+    if (!query) {
+        return (sql_lexer_t){.input = "", .len = 0, .pos = 0};
+    }
+    size_t len = strlen(query);
+    sql_lexer_t lexer = (sql_lexer_t){.input = query, .len = len, .pos = 0};
+    return lexer;
+}
 
-## 4. Beyond Day 20: The jsonbench.com Challenge
+sql_token_t sql_lexer_next_token(sql_lexer_t *lexer) {
 
-While `simpledb` is now a fully functional C11 database, modern engines compete on massive scale benchmarks like **[jsonbench.com](https://jsonbench.com)**. This benchmark evaluates engines (like ClickHouse and DuckDB) against up to 1 Billion deeply nested JSON events (e.g., from the BlueSky firehose) totaling ~500GB of raw text.
+    while (lexer->pos < lexer->len && isspace((unsigned char)lexer->input[lexer->pos])) {
+        lexer->pos++;
+    }
 
-To scale `simpledb` to crush jsonbench.com, you would need to implement three major architectural extensions:
+    if (lexer->pos >= lexer->len) {
+        return (sql_token_t){.type = TOKEN_EOF, .text = "", .length = 0};
+    }
+    char c = lexer->input[lexer->pos];
 
-1. **Robust JSON Path Parsing (`simdjson`)**: Our Day 7 schema registry currently handles flat JSON key-value pairs. Jsonbench heavily queries nested paths like `data.commit.collection`. You'd need to extend the parser to recursively traverse and **flatten** nested objects.
-   * **What is Flattening?** Columnar databases require flat 1D arrays, but JSON is a deeply nested tree. Flattening converts the nested hierarchy into flat, dot-notated column names. For example, a JSON object like `{"data": {"commit": {"collection": "post"}}}` is transformed and stored internally as a single flat column named `data.commit.collection` with the value `"post"`.
-2. **Multi-Threaded Ingestion Pipeline**: Parsing 500GB of JSON on a single thread is a massive bottleneck. You would need to partition the input file and parallelize the JSON parsing and columnar encoding across all available CPU cores.
-3. **Advanced On-Disk Compression**: At 1 Billion rows, disk I/O becomes the limiting factor. You would need to implement block-level compression (like LZ4 or Zstd) on top of the `.bin` files to dramatically shrink the disk footprint and maximize I/O throughput before the SIMD engine takes over.
+    switch (c) {
+    case ',':
+        lexer->pos++;
+        return (sql_token_t){.type = TOKEN_COMMA, .text = ",", .length = 1};
+    case '(':
+        lexer->pos++;
+        return (sql_token_t){.type = TOKEN_LPAREN, .text = "(", .length = 1};
+    case ')':
+        lexer->pos++;
+        return (sql_token_t){.type = TOKEN_RPAREN, .text = ")", .length = 1};
+    case '=':
+        lexer->pos++;
+        return (sql_token_t){.type = TOKEN_EQUALS, .text = "=", .length = 1};
+    case '>':
+        lexer->pos++;
+        return (sql_token_t){.type = TOKEN_GREATER, .text = ">", .length = 1};
+    case '<':
+        lexer->pos++;
+        return (sql_token_t){.type = TOKEN_LESS, .text = "<", .length = 1};
+    case ';':
+        lexer->pos++;
+        return (sql_token_t){.type = TOKEN_EOF, .text = ";", .length = 1};
+    }
 
-Congratulations! You have completed `simpledb`, a full columnar analytical database engine in C11!
+    // quoted text
+    if (c == '\'') {
+        lexer->pos++; // skip opening quote
+        size_t start = lexer->pos;
+        while (lexer->pos < lexer->len && lexer->input[lexer->pos] != '\'') {
+            lexer->pos++;
+        }
+        size_t len = lexer->pos - start;
+        sql_token_t tok = {.type = TOKEN_STRING, .length = (int)len};
+        if (len >= sizeof(tok.text)) {
+            return (sql_token_t){.type = TOKEN_ERROR, .length = 0};
+        }
+        memcpy(tok.text, &lexer->input[start], len);
+        tok.text[len] = '\0';
+        if (lexer->pos < lexer->len && lexer->input[lexer->pos] == '\'') {
+            lexer->pos++; // skip closing quote
+        }
+        return tok;
+    }
+
+    // numbers
+    if (isdigit((unsigned char)c)) {
+        size_t start = lexer->pos;
+        do {
+            lexer->pos++;
+        } while (lexer->pos < lexer->len && isdigit((unsigned char)lexer->input[lexer->pos]));
+
+        // float
+        if (lexer->pos + 1 < lexer->len && lexer->input[lexer->pos] == '.' &&
+            isdigit((unsigned char)lexer->input[lexer->pos + 1])) {
+            do {
+                lexer->pos++;
+            } while (lexer->pos < lexer->len && isdigit((unsigned char)lexer->input[lexer->pos]));
+        }
+
+        size_t len = lexer->pos - start;
+        sql_token_t tok = {.type = TOKEN_NUMBER, .length = (int)len};
+
+        if (len >= sizeof(tok.text)) {
+            return (sql_token_t){.type = TOKEN_ERROR, .length = 0};
+        }
+        memcpy(tok.text, &lexer->input[start], len);
+        tok.text[len] = '\0';
+        return tok;
+    }
+
+    if (isalpha((unsigned char)c) || c == '_') {
+        size_t start = lexer->pos;
+        do {
+            lexer->pos++;
+        } while (lexer->pos < lexer->len &&
+                 (isalnum((unsigned char)lexer->input[lexer->pos]) ||
+                  lexer->input[lexer->pos] == '_' || lexer->input[lexer->pos] == '.'));
+        size_t len = lexer->pos - start;
+        sql_token_t tok = {.type = TOKEN_IDENTIFIER, .length = (int)len};
+        if (len >= sizeof(tok.text)) {
+            return (sql_token_t){.type = TOKEN_ERROR, .length = 0};
+        }
+        memcpy(tok.text, &lexer->input[start], len);
+        tok.text[len] = '\0';
+        if (strcasecmp(tok.text, "SELECT") == 0)
+            tok.type = TOKEN_SELECT;
+        else if (strcasecmp(tok.text, "FROM") == 0)
+            tok.type = TOKEN_FROM;
+        else if (strcasecmp(tok.text, "WHERE") == 0)
+            tok.type = TOKEN_WHERE;
+        else if (strcasecmp(tok.text, "GROUP") == 0)
+            tok.type = TOKEN_GROUP;
+        else if (strcasecmp(tok.text, "BY") == 0)
+            tok.type = TOKEN_BY;
+        else if (strcasecmp(tok.text, "INSERT") == 0)
+            tok.type = TOKEN_INSERT;
+        else if (strcasecmp(tok.text, "INTO") == 0)
+            tok.type = TOKEN_INTO;
+        else if (strcasecmp(tok.text, "VALUES") == 0)
+            tok.type = TOKEN_VALUES;
+        else if (strcasecmp(tok.text, "ORDER") == 0)
+            tok.type = TOKEN_ORDER;
+        else if (strcasecmp(tok.text, "ASC") == 0)
+            tok.type = TOKEN_ASC;
+        else if (strcasecmp(tok.text, "DESC") == 0)
+            tok.type = TOKEN_DESC;
+        return tok;
+    }
+
+    lexer->pos++;
+    return (sql_token_t){.type = TOKEN_ERROR, .length = 0};
+}
+
+sql_parser_t sql_parser_create(const char *query) {
+    sql_lexer_t lexer = sql_lexer_create(query);
+    sql_token_t current = sql_lexer_next_token(&lexer);
+    sql_token_t peek = sql_lexer_next_token(&lexer);
+    return (sql_parser_t){.lexer = lexer, .current_token = current, .peek_token = peek};
+}
+
+static void parser_advance(sql_parser_t *parser) {
+    parser->current_token = parser->peek_token;
+    parser->peek_token = sql_lexer_next_token(&parser->lexer);
+}
+
+static bool sql_parser_parse_insert(sql_parser_t *parser, ast_query_t *out_query) {
+    out_query->stmt_type = STMT_INSERT;
+    parser_advance(parser); // consume INSERT
+
+    if (parser->current_token.type != TOKEN_INTO)
+        return false;
+    parser_advance(parser); // consume INTO
+
+    if (parser->current_token.type != TOKEN_IDENTIFIER)
+        return false;
+    memcpy(out_query->table_name, parser->current_token.text, parser->current_token.length);
+    parser_advance(parser); // consume table name
+
+    // Branch A: Bulk JSON (INSERT INTO <table> FROM '<path>')
+    if (parser->current_token.type == TOKEN_FROM) {
+        parser_advance(parser); // consume FROM
+        if (parser->current_token.type != TOKEN_STRING)
+            return false;
+        out_query->is_bulk_insert = true;
+        memcpy(out_query->from_file_path, parser->current_token.text, parser->current_token.length);
+        parser_advance(parser); // consume file path
+        return true;
+    }
+
+    // Branch B: Row Values (INSERT INTO <table> (col1, col2) VALUES (val1, val2))
+    if (parser->current_token.type != TOKEN_LPAREN)
+        return false;
+    parser_advance(parser); // consume '('
+
+    while (parser->current_token.type == TOKEN_IDENTIFIER) {
+        memcpy(out_query->insert_cols[out_query->num_insert_cols++], parser->current_token.text,
+               parser->current_token.length);
+        parser_advance(parser);
+        if (parser->current_token.type == TOKEN_COMMA)
+            parser_advance(parser);
+    }
+    if (parser->current_token.type != TOKEN_RPAREN)
+        return false;
+    parser_advance(parser); // consume ')'
+
+    if (parser->current_token.type != TOKEN_VALUES)
+        return false;
+    parser_advance(parser); // consume VALUES
+    if (parser->current_token.type != TOKEN_LPAREN)
+        return false;
+    parser_advance(parser); // consume '('
+
+    while (parser->current_token.type == TOKEN_NUMBER ||
+           parser->current_token.type == TOKEN_STRING) {
+        ast_value_t *val = &out_query->insert_vals[out_query->num_insert_vals++];
+        if (parser->current_token.type == TOKEN_NUMBER) {
+            val->is_string = false;
+            val->int_val = atoi(parser->current_token.text);
+        } else {
+            val->is_string = true;
+            memcpy(val->string_val, parser->current_token.text, parser->current_token.length);
+        }
+        parser_advance(parser);
+        if (parser->current_token.type == TOKEN_COMMA)
+            parser_advance(parser);
+    }
+    if (parser->current_token.type != TOKEN_RPAREN)
+        return false;
+    parser_advance(parser); // consume ')'
+
+    return out_query->num_insert_cols == out_query->num_insert_vals;
+}
+
+static bool sql_parser_parse_select(sql_parser_t *parser, ast_query_t *out_query) {
+
+    out_query->stmt_type = STMT_SELECT;
+    parser_advance(parser);
+
+    // SELET ... expressions
+    size_t n = 0;
+    while (parser->current_token.type == TOKEN_IDENTIFIER) {
+        ast_expr_t expr = (ast_expr_t){0};
+        if (parser->peek_token.type == TOKEN_LPAREN) {
+            if (strcasecmp(parser->current_token.text, "SUM") == 0)
+                expr.type = AST_AGG_SUM;
+            else if (strcasecmp(parser->current_token.text, "COUNT") == 0)
+                expr.type = AST_AGG_COUNT;
+            else if (strcasecmp(parser->current_token.text, "MAX") == 0)
+                expr.type = AST_AGG_MAX;
+            else if (strcasecmp(parser->current_token.text, "MIN") == 0)
+                expr.type = AST_AGG_MIN;
+            else
+                return false;
+            parser_advance(parser); // consume function name (lands on '(')
+            parser_advance(parser); // consume '(' (lands on column name)
+            if (parser->current_token.type != TOKEN_IDENTIFIER)
+                return false;
+            memcpy(expr.column_name, parser->current_token.text, parser->current_token.length);
+            parser_advance(parser); // consume column name (lands on ')')
+            if (parser->current_token.type != TOKEN_RPAREN)
+                return false;
+            parser_advance(parser); // consume ')'
+        } else {
+            expr.type = AST_PROJECTION;
+            memcpy(expr.column_name, parser->current_token.text, parser->current_token.length);
+            parser_advance(parser);
+        }
+        if (parser->peek_token.type == TOKEN_IDENTIFIER &&
+            strcasecmp(parser->current_token.text, "AS") == 0) {
+            parser_advance(parser);
+            memcpy(expr.alias, parser->current_token.text, parser->current_token.length);
+            parser_advance(parser);
+        }
+        out_query->select_exprs[n++] = expr;
+        if (parser->current_token.type == TOKEN_COMMA) {
+            parser_advance(parser);
+        }
+    }
+    out_query->num_select_exprs = n;
+
+    // FROM 'table'
+    if (parser->current_token.type != TOKEN_FROM)
+        return false;
+    parser_advance(parser); // consume FROM
+    if (parser->current_token.type != TOKEN_IDENTIFIER)
+        return false;
+    memcpy(out_query->table_name, parser->current_token.text, parser->current_token.length);
+    parser_advance(parser); // consume table name
+
+    // WHERE ... cond
+    if (parser->current_token.type == TOKEN_WHERE) {
+        parser_advance(parser); // consume WHERE
+        if (parser->current_token.type != TOKEN_IDENTIFIER)
+            return false;
+        ast_predicate_t *pred = &out_query->predicates[out_query->num_predicates++];
+        memcpy(pred->column_name, parser->current_token.text, parser->current_token.length);
+        parser_advance(parser); // consume column name
+        if (parser->current_token.type == TOKEN_EQUALS)
+            pred->op = OP_EQUALS;
+        else if (parser->current_token.type == TOKEN_GREATER)
+            pred->op = OP_GREATER_THAN;
+        else if (parser->current_token.type == TOKEN_LESS)
+            pred->op = OP_LESS_THAN;
+        else
+            return false;
+        parser_advance(parser); // consume operator
+        if (parser->current_token.type == TOKEN_NUMBER) {
+            pred->is_string = false;
+            pred->int_val = atoi(parser->current_token.text);
+        } else if (parser->current_token.type == TOKEN_STRING) {
+            pred->is_string = true;
+            memcpy(pred->string_val, parser->current_token.text, parser->current_token.length);
+        } else {
+            return false;
+        }
+        parser_advance(parser); // consume value
+    }
+
+    // GROUP BY
+    if (parser->current_token.type == TOKEN_GROUP) {
+        parser_advance(parser); // consume GROUP
+        if (parser->current_token.type != TOKEN_BY)
+            return false;
+        parser_advance(parser); // consume BY
+        if (parser->current_token.type != TOKEN_IDENTIFIER)
+            return false;
+        memcpy(out_query->group_by_col, parser->current_token.text, parser->current_token.length);
+        out_query->has_group_by = true;
+        parser_advance(parser); // consume column name
+    }
+
+    // order by ...
+    if (parser->current_token.type == TOKEN_ORDER) {
+        parser_advance(parser); // consume ORDER
+        if (parser->current_token.type != TOKEN_BY)
+            return false;
+        parser_advance(parser); // consume BY
+        if (parser->current_token.type != TOKEN_IDENTIFIER)
+            return false;
+        memcpy(out_query->order_by_col, parser->current_token.text, parser->current_token.length);
+        out_query->has_order_by = true;
+        out_query->order_desc = false; // default ASC
+        parser_advance(parser);        // consume column name
+        if (parser->current_token.type == TOKEN_DESC) {
+            out_query->order_desc = true;
+            parser_advance(parser);
+        } else if (parser->current_token.type == TOKEN_ASC) {
+            parser_advance(parser);
+        }
+    }
+    return true;
+}
+
+bool sql_parser_parse(sql_parser_t *parser, ast_query_t *out_query) {
+    if (!parser || !out_query)
+        return false;
+    *out_query = (ast_query_t){0};
+
+    if (parser->current_token.type == TOKEN_INSERT) {
+        return sql_parser_parse_insert(parser, out_query);
+    } else if (parser->current_token.type == TOKEN_SELECT) {
+        return sql_parser_parse_select(parser, out_query);
+    } else {
+        return false;
+    }
+}
+```
+
+With the parser verified and complete, we now have an expressive front-end that translates raw SQL strings into a structured `ast_query_t`. In **Day 21: The Interactive REPL CLI & Query Engine**, we take this AST and wire it into an interactive command-line interface, streaming NDJSON ingestion via `yyjson`, dynamic schema inference, and vectorized execution pipeline coordination!
+

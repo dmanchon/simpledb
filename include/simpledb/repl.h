@@ -1,14 +1,8 @@
 #pragma once
 
 #include "simpledb/table.h"
-#include <stdbool.h>
+#include "simpledb/sql_parser.h"
 
-typedef struct {
-    table_t* current_db; // For now, the REPL only holds one table open
-    bool running;
-} repl_t;
-
-repl_t repl_create(table_t* initial_db);
-void repl_run(repl_t* repl);
-void repl_destroy(repl_t* repl);
-
+void repl_run(table_t *db);
+void repl_exec_insert(table_t *db, ast_query_t *ast);
+void repl_exec_select(table_t *db, ast_query_t *ast);

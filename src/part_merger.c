@@ -113,7 +113,6 @@ static void stream_fetch_next_and_push(part_stream_t *stream, min_heap_t *heap, 
 }
 
 size_t part_merger_execute(part_merger_t *merger) {
-
     if (merger->num_parts == 0) {
         return 0; // Abort instantly!
     }

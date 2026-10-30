@@ -1,5 +1,12 @@
 # Day 14 Bis: Table Flush & Immutable Part Serialization
 
+> [!TIP]
+> **Long-Read Engineering Log (~1,145 lines) — TL;DR & Fast Navigation**
+> This post is an unabridged Socratic pair-programming log covering the serialization of in-memory columnar buffers into immutable ClickHouse-style disk parts (`table_flush`).
+> - **Two-Stage Write Path:** Decouples high-speed RAM ingestion (`table_insert_batch`) from sequential disk serialization (`table_flush`).
+> - **Self-Contained Immutable Parts:** Flushes each column's `.bin` data file, `.mrk` granule marks, `primary.idx` sparse index, `.dict` string pool, and `fts.idx` inverted index into an isolated part directory before resetting RAM buffers in place.
+> - **Want to go straight to the code?** [Jump straight to the Final C11 Implementation (`src/table.c`)](#final-implementation-srctablec).
+
 ### Architectural Overview: Why Decouple Ingestion from Disk Storage?
 
 In Day 14, we built the table ingestion layer (`table_insert_batch`), multiplexing incoming row-oriented batches into in-memory polymorphic columnar buffers (`buffer_i32_t`, `string_dict_column_t`, `raw_string_column_t`). Operating purely in RAM enables ingestion throughput exceeding millions of rows per second.

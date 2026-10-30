@@ -44,7 +44,7 @@ block_t table_scanner_next(table_scanner_t *scanner) {
     }
 
     if (!scanner->finished_disk_parts) {
-        block_t block;
+        block_t block = {0};
         block.num_columns = scanner->num_columns;
         block.columns = malloc(sizeof(slice_i32_t) * scanner->num_columns);
 
@@ -74,12 +74,14 @@ block_t table_scanner_next(table_scanner_t *scanner) {
         if (scanner->table->row_count == 0)
             return (block_t){0};
 
-        block_t block;
+        block_t block = {0};
         block.num_columns = scanner->num_columns;
         block.columns = malloc(sizeof(slice_i32_t) * scanner->num_columns);
 
         for (size_t i = 0; i < scanner->num_columns; i++) {
-            block.columns[i] = buffer_i32_as_slice(scanner->table->column_buffers[i]);
+            int32_t col_idx =
+                schema_registry_get_column_index(scanner->table->schema, scanner->column_names[i]);
+            block.columns[i] = buffer_i32_as_slice(scanner->table->column_buffers[col_idx]);
             if (i == 0)
                 block.num_rows = scanner->table->row_count;
         }

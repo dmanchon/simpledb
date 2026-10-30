@@ -1,5 +1,12 @@
 # Day 14: The Table Abstraction (Ingestion Layer)
 
+> [!TIP]
+> **Long-Read Engineering Log (~685 lines) — TL;DR & Fast Navigation**
+> This post is an unabridged Socratic pair-programming log capturing the design of `table_t` and polymorphic columnar batch ingestion in C11.
+> - **Row-to-Column Multiplexing (`table_insert_batch`):** Accepts a batch of columnar arrays (`const void ***columnar_values`) and dispatches each column into its active in-memory vector (`buffer_i32_t`, `string_dict_column_t`, or `raw_string_column_t`).
+> - **Dynamic Schema & Secondary Indexes:** Coordinates `schema_registry_t` lookups alongside live updates to the string dictionary and inverted FTS index.
+> - **Want to go straight to the code?** [Jump to the C Header (`include/simpledb/table.h`)](#c-header-includesimpledbtableh), [Jump to the Unit Tests (`tests/test_db.c`)](#unit-tests-teststest_dbc), or [Jump to the Final C11 Implementation (`src/table.c`)](#final-implementation-srctablec).
+
 ### Architectural Explanation
 
 Up until now, we've built individual components: memory-mapped columns, string dictionaries, null bitmaps, and sparse primary indexes. However, a database user doesn't insert data column by column; they insert *rows* (or records) into a *table*.

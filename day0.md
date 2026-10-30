@@ -49,7 +49,7 @@ Apache Arrow establishes a standardized, language-agnostic C Data Interface. Ado
 
 ## 3. Explicit Non-Goals
 
-To maintain a lean implementation targeted under 2,500 lines of C11, `simpledb` intentionally excludes several traditional database subsystems:
+To maintain a lean implementation targeted under 5,000 lines of C11, `simpledb` intentionally excludes several traditional database subsystems:
 
 - Commercial Production Readiness: The engine is designed as an educational reference implementation for columnar database internals rather than a general-purpose production store.
 - Full ANSI SQL Compliance: The project avoids SQL grammar parsers, query planners, and cost-based optimizers in favor of a minimal vector REPL shell.

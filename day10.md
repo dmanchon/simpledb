@@ -1,4 +1,13 @@
 
+# Day 10: ClickHouse-Style Sparse Primary Index
+
+> [!TIP]
+> **Long-Read Engineering Log (~680 lines) — TL;DR & Fast Navigation**
+> This post is an unabridged Socratic pair-programming log covering the design and implementation of ClickHouse-style Sparse Primary Indexes in C11.
+> - **8,192x Index Reduction (`sparse_index_t`):** Instead of indexing every row like an OLTP B-Tree, stores only the first primary key value of each 8,192-row Granule so billion-row indexes fit inside CPU L2/L3 cache.
+> - **Binary Search Granule Pruning:** Uses `O(log2(Granules))` binary search and min/max zone maps to return a `bitmap_t` of candidate granules to read from disk.
+> - **Want to go straight to the code?** [Jump to the Headers (`sparse_index.h` & `storage.h`)](#8-the-headers-read-path-vs-write-path), [Jump to the Unit Tests](#10-testing-the-bitmap-pruner), or [Jump to the Final C11 Implementation (`sparse_index.c` & `storage.c`)](#11-the-final-implementation-sparse_indexc).
+
 Today, we tackle one of the most brilliant architectural optimizations in OLAP databases: **The Sparse Primary Index**.
 
 In a traditional OLTP database like PostgreSQL or MySQL, primary keys are indexed using a **B-Tree** (often a dense index). In a dense index, every single row in the database has a pointer in the index. If you have 1 billion rows, your index contains 1 billion entries. These dense indexes often consume hundreds of gigabytes of RAM, drastically inflating database operating costs.

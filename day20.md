@@ -1,5 +1,12 @@
 # Day 20: Minimal SQL & Query Parser (Lexer, Recursive Descent & AST)
 
+> [!TIP]
+> **Long-Read Engineering Log (~1,280 lines) — TL;DR & Fast Navigation**
+> This post is an unabridged Socratic pair-programming log covering our zero-dependency SQL Lexer, Recursive Descent Parser, and AST in C11.
+> - **Zero-Allocation Tokenizer (`sql_lexer_next_token`):** Scans raw SQL strings into typed `sql_token_t` tokens without Flex/Bison code bloat or heap allocations.
+> - **Recursive Descent AST (`sql_parser_parse`):** Parses analytical `SELECT ... WHERE ... GROUP BY ... ORDER BY`, single-row `INSERT INTO ... VALUES (...)`, and bulk `INSERT INTO ... FROM 'file.json'` into a flat, arena-friendly `ast_query_t` struct.
+> - **Want to go straight to the code?** [Jump to the C Header (`include/simpledb/sql_parser.h`)](#1-the-headers), [Jump to the Unit Tests](#2-mocking-and-testing), or [Jump to the Final C11 Implementation (`src/sql_parser.c`)](#3-the-final-listing-srcsql_parserc).
+
 Welcome to Day 20! Over the past 19 days, we have built a fully functional, highly optimized, vectorized columnar analytical database engine from scratch in C11. We have zero-copy memory mapping, SIMD vectorized filtering, high-cardinality dictionaries, free-text search, disk-spilling hash aggregations, and background compaction.
 
 But up to this point, interacting with `simpledb` has required writing raw C unit tests and linking directly against the internal engine APIs. A database needs an accessible query language. Today, we build the query front-end: a **Lexer**, a **Recursive Descent Parser**, and an **Abstract Syntax Tree (AST)** for SQL queries.

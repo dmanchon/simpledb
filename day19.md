@@ -1,5 +1,12 @@
 # Day 19: The MergeTree Part Compactor (Background Part Merging Engine)
 
+> [!TIP]
+> **Long-Read Engineering Log (~1,215 lines) — TL;DR & Fast Navigation**
+> This post is an unabridged Socratic pair-programming log covering ClickHouse-style MergeTree part compaction and multi-threaded catalog concurrency in C11.
+> - **K-Way Sorted Part Merging (`part_merger_t`):** Streams multiple immutable on-disk parts through a Min-Heap while physically purging rows flagged in each part's `deletion_vector_t`.
+> - **Lock-Free Readers & Background Compaction (`pthread_rwlock_t`):** Uses ClickHouse's `all_min_max_level` naming convention and read-write locks so background compaction merges parts without blocking concurrent queries.
+> - **Want to go straight to the code?** [Jump to the C Header (`include/simpledb/part_merger.h`)](#1-includesimpledbpart_mergerh), [Jump to the Unit Tests](#2-teststest_part_mergerc), or [Jump to the Final C11 Implementation (`src/part_merger.c`)](#14-final-implementation).
+
 Welcome to Day 19! Today we tackle a critical component of any modern analytical column store: **Background Compaction**.
 
 In high-throughput ingestion systems (like ClickHouse's MergeTree or RocksDB's LSM Tree), data is continuously written to disk as small, immutable files called "parts" or "segments". While appending small immutable files is extremely fast, reading them becomes slow over time. A query would have to open, scan, and merge thousands of separate small parts. 

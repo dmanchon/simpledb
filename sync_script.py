@@ -78,7 +78,7 @@ Apache Arrow establishes a standardized, language-agnostic C Data Interface. Ado
 
 ## 3. Explicit Non-Goals
 
-To maintain a lean implementation targeted under 2,500 lines of C11, `simpledb` intentionally excludes several traditional database subsystems:
+To maintain a lean implementation targeted under 5,000 lines of C11, `simpledb` intentionally excludes several traditional database subsystems:
 
 - Commercial Production Readiness: The engine is designed as an educational reference implementation for columnar database internals rather than a general-purpose production store.
 - Full ANSI SQL Compliance: The project avoids SQL grammar parsers, query planners, and cost-based optimizers in favor of a minimal vector REPL shell.
@@ -111,6 +111,11 @@ write_local('/Users/dmanchon/repos/cdb/day1.md', day1_body)
 write_local('/Users/dmanchon/repos/cdb/day2.md', day2_body)
 write_local('/Users/dmanchon/repos/cdb/day3.md', day3_body)
 
+# Day 10
+day10_body = read_local('/Users/dmanchon/repos/cdb/day10.md') if os.path.exists('/Users/dmanchon/repos/cdb/day10.md') else ""
+if day10_body:
+    write_local('/Users/dmanchon/repos/cdb/day10.md', day10_body)
+
 # Day 13
 day13_body = read_local('/Users/dmanchon/repos/cdb/day13.md')
 write_local('/Users/dmanchon/repos/cdb/day13.md', day13_body)
@@ -140,6 +145,8 @@ update_file(f'{astro_dir}/day0-motivations-and-influences.md', day0_body)
 update_file(f'{astro_dir}/day1-64byte-simd-alignment.md', day1_body)
 update_file(f'{astro_dir}/day2-zero-copy-typed-slices.md', day2_body)
 update_file(f'{astro_dir}/day3-zero-copy-mmap-files.md', day3_body)
+if day10_body:
+    update_file(f'{astro_dir}/day10-sparse-primary-index.md', day10_body)
 update_file(f'{astro_dir}/day13-deletion-vectors.md', day13_body)
 update_file(f'{astro_dir}/day14.md', day14_body)
 if day14bis_body:
@@ -198,8 +205,16 @@ if day21_body:
     day21_path = f'{astro_dir}/day21.md'
     if not os.path.exists(day21_path):
         with open(day21_path, 'w') as f:
-            f.write('---\ntitle: "Day 21: The Interactive REPL CLI & Query Engine"\npubDate: 2026-09-04\ndescription: "Building an interactive analytical database REPL, dynamic schema inference, streaming NDJSON ingestion with yyjson, and vectorized query execution."\n---\n\n')
+            f.write('---\ntitle: "Day 21: The Interactive REPL & Write Path (Dynamic Schema Evolution & Streaming NDJSON Ingestion)"\npubDate: 2026-09-04\ndescription: "Building an interactive analytical database REPL, dynamic schema evolution with backfilling, and streaming NDJSON ingestion with yyjson."\n---\n\n')
     update_file(day21_path, day21_body)
+
+day22_body = read_local('/Users/dmanchon/repos/cdb/day22.md') if os.path.exists('/Users/dmanchon/repos/cdb/day22.md') else ""
+if day22_body:
+    day22_path = f'{astro_dir}/day22.md'
+    if not os.path.exists(day22_path):
+        with open(day22_path, 'w') as f:
+            f.write('---\ntitle: "Day 22: The REPL Read Path & Query Planner (Binding SQL SELECT to the Vectorized Pipeline)"\npubDate: 2026-09-05\ndescription: "Building a Query Planner and Binder that translates SQL SELECT ASTs into physical operator trees for vectorized execution."\n---\n\n')
+    update_file(day22_path, day22_body)
 
 print("Done")
 

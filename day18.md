@@ -1,5 +1,12 @@
 # Day 18: APL / K Vectorized Physical Execution Pipeline
 
+> [!TIP]
+> **Long-Read Engineering Log (~790 lines) — TL;DR & Fast Navigation**
+> This post is an unabridged Socratic pair-programming log covering the design of our vectorized physical execution pipeline in C11.
+> - **Tagged-Union Operator DAG (`physical_operator_t`):** Represents `OP_SCAN`, `OP_FILTER`, and `OP_AGGREGATE` nodes without C++ virtual method tables.
+> - **Batch-at-a-Time Vectorized Execution (`exec_pipeline_run`):** Streams `block_t` chunks from the multi-part Table Scanner through branchless SIMD filters and into Partitioned Grace Hash Aggregation.
+> - **Want to go straight to the code?** [Jump to the C Header (`include/simpledb/exec_pipeline.h`)](#1-includesimpledbexec_pipelineh), [Jump to the Unit Tests](#2-teststest_exec_pipelinec), or [Jump to the Final C11 Implementation (`src/exec_pipeline.c`)](#3-the-final-implementation-srcexec_pipelinec).
+
 Welcome to Day 18! Today we piece together everything we've built into a cohesive **Vectorized Physical Execution Pipeline**. 
 
 In traditional relational databases (like PostgreSQL), the query engine usually employs a Volcano-style iterator model where data is passed one row at a time. This is extremely flexible but suffers from significant overhead: function calls and instruction cache misses per row. 

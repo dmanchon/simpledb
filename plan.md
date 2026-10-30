@@ -29,7 +29,7 @@
 | **MonetDB** | BAT (Binary Association Tables) | Bulk BAT Kernels (C) | SQL | Pioneered vectorized column stores in C | Heavy legacy codebase |
 | **ClickHouse** | MergeTree LSM Columnar | Granule-based Vector Loops | SQL | Extreme scale for log analytics | Heavy LZ4/Zstd CPU decompression before SIMD runs |
 | **DuckDB** | Column-Group Block | Vectorized Engine (C/C++) | SQL | Embedded, rich SQL features | Lacks native APL/K array reduction operators & integrated FTS |
-| **`simpledb`** | **Zero-Copy `mmap` + Deletion Vectors** | **APL & K/q SIMD Primitives (C11)** | **Hybrid SQL + APL Array Syntax** | **Ultra-lean (~2,500 LOC C11), SIMD on compressed data, native FTS** | Designed for single-node high-performance analytical workloads |
+| **`simpledb`** | **Zero-Copy `mmap` + Deletion Vectors** | **APL & K/q SIMD Primitives (C11)** | **Hybrid SQL + APL Array Syntax** | **Ultra-lean (~5,000 LOC C11), SIMD on compressed data, native FTS** | Designed for single-node high-performance analytical workloads |
 
 ---
 
@@ -46,7 +46,7 @@
 
 ---
 
-## 5. Prototyping Strategy to Keep Lines of Code (LOC) Low (~2,500 LOC C11)
+## 5. Prototyping Strategy to Keep Lines of Code (LOC) Low (~5,000 LOC C11)
 
 | Module | Focus Area | Estimated LOC |
 | :--- | :--- | :--- |
@@ -57,7 +57,7 @@
 | **Phase 5** | External Merge Sort, Grace Hash Aggregation, Bitset Deletion Vectors | ~450 LOC |
 | **Phase 6** | APL / K physical operators (`seq_scan`, `compress`, `gather`, `aggregate`) | ~500 LOC |
 | **Phase 7** | Minimal SQL & K/q Query Parser & CLI REPL loop | ~350 LOC |
-| **Total** | **Full Database Engine in C11** | **~2,500 LOC** |
+| **Total** | **Full Database Engine in C11** | **~5,000 LOC** |
 
 ---
 

@@ -1,5 +1,12 @@
 # Day 13: Deletion Vectors
 
+> [!TIP]
+> **Long-Read Engineering Log (~650 lines) — TL;DR & Fast Navigation**
+> This post is an unabridged Socratic pair-programming log capturing the architecture, bitwise arithmetic, and memory layout of Roaring-style Deletion Vectors in C11.
+> - **Why Deletion Vectors:** Columnar `.bin` files are immutable on disk; rewriting gigabytes of data to shift rows after a `DELETE` destroys write throughput. Instead, we record deleted `row_id`s in a separate bitset mask.
+> - **Roaring 2-Level Partitioning:** Splits 32-bit row IDs into a 16-bit high chunk key (`row_id >> 16`) and a 16-bit low offset (`row_id & 0xFFFF`), dynamically upgrading containers from sorted `uint16_t` arrays ($\le 4,096$ items) to $2^{16}$-bit bitmaps ($8\text{ KB}$).
+> - **Want to go straight to the code?** [Jump to the C Header (`deletion_vector.h`)](#1-the-c-header-deletion_vectorh), [Jump to the Unit Tests](#5-unit-tests), or [Jump to the Full C11 Implementation (`src/deletion_vector.c`)](#6-full-implementation-deletion_vectorc).
+
 
 ### Context
 Up until now, we've built all the critical pieces of our immutable columnar storage engine:

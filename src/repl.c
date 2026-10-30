@@ -2,6 +2,8 @@
 #include "simpledb/schema_registry.h"
 #include "simpledb/sql_parser.h"
 #include "simpledb/table.h"
+#include "simpledb/exec_pipeline.h"
+#include "simpledb/table_scanner.h"
 #include "yyjson.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -91,7 +93,6 @@ static void repl_exec_bulk_insert(table_t *db, const char *file_path) {
     // prepare data buffers
     size_t num_cols = db->schema->count;
     void **col_data = calloc(num_cols, sizeof(void *));
-    const void **col_ptrs = calloc(num_cols, sizeof(const void *));
 
     for (size_t c = 0; c < num_cols; c++) {
         if (db->schema->columns[c].type == COL_TYPE_I32) {
@@ -167,7 +168,7 @@ static void repl_exec_bulk_insert(table_t *db, const char *file_path) {
     
     // incomplete last chunk
     if (chunk_rows > 0) {
-	table_insert_batch(db, (const void ***)col_ptrs, num_cols, chunk_rows);
+	table_insert_batch(db, (const void ***)col_data, num_cols, chunk_rows);
 	for (size_t c = 0; c < num_cols; c++) {
 	    if (db->schema->columns[c].type != COL_TYPE_I32) {
 		char **arr = (char **)col_data[c];
@@ -181,7 +182,6 @@ static void repl_exec_bulk_insert(table_t *db, const char *file_path) {
     fclose(fp);
     for (size_t c = 0; c < num_cols; c++) free(col_data[c]);
     free(col_data);
-    free(col_ptrs);
 }
 
 void repl_exec_insert(table_t *db, ast_query_t *ast) {
@@ -221,9 +221,7 @@ void repl_exec_insert(table_t *db, ast_query_t *ast) {
     }
 
     int rc = table_insert_batch(db, (const void ***)col_ptrs, db->schema->count, 1);
-    if (rc == 0) {
-        printf("INSERT 1 (table now has %zu rows in RAM).\n", db->row_count);
-    } else {
+    if (rc != 0) {
         printf("Error: insert failed.\n");
     }
     
@@ -232,7 +230,90 @@ void repl_exec_insert(table_t *db, ast_query_t *ast) {
     free(col_ptrs);
 }
 
-void repl_exec_select(table_t *db, ast_query_t *ast) {}
+physical_operator_t *repl_exec_select(table_t *db, ast_query_t *ast) {
+
+    char **column_names = calloc(sizeof(char *), ast->num_select_exprs);
+    for (size_t i = 0; i < ast->num_select_exprs; i++) {
+	column_names[i] = ast->select_exprs[i].column_name;
+    }
+
+    // selections
+    physical_operator_t* op_scan = calloc(sizeof(physical_operator_t), 1);
+    op_scan->type = OP_SCAN;
+    op_scan->scan.scanner =
+        table_scanner_create(db, (const char **)column_names, ast->num_select_exprs);
+
+    physical_operator_t *root = op_scan;
+    
+    // filters
+    if (ast->num_predicates > 0) {
+	physical_operator_t* op_filter = calloc(sizeof(physical_operator_t), 1);
+
+	op_filter->type = OP_FILTER;
+	op_filter->num_children = 1;
+	op_filter->children = calloc(1, sizeof(physical_operator_t*));
+        op_filter->children[0] = op_scan;
+	int column_id = -1;
+        for (size_t i = 0; i < ast->num_select_exprs; i++) {
+	    if (strcmp(ast->predicates[0].column_name, column_names[i]) == 0) {
+		column_id = i;
+		break;
+	    }
+	}
+
+        if (column_id == -1) {
+            printf("Error: column %s cannot be retrieved.\n", ast->predicates[0].column_name);
+	    return NULL;
+        }
+	
+	op_filter->filter.column_idx = column_id;
+        op_filter->filter.threshold = ast->predicates[0].int_val;
+        switch (ast->predicates[0].op) {
+	case OP_EQUALS:
+            op_filter->filter.op = COMPARE_EQ;
+            break;
+        case OP_LESS_THAN:
+            op_filter->filter.op = COMPARE_LT;
+	    break;
+	case OP_GREATER_THAN:
+            op_filter->filter.op = COMPARE_GT;
+	    break;
+        }
+
+        root = op_filter;
+    }
+   
+
+    //aggregations
+    if (ast->has_group_by) {
+        physical_operator_t *op_agg = calloc(sizeof(physical_operator_t), 1);
+        op_agg->type = OP_AGGREGATE;
+        op_agg->num_children = 1;
+        op_agg->children = calloc(1, sizeof(physical_operator_t *));
+        op_agg->children[0] = root;
+        op_agg->aggregate.aggregator = grace_hash_agg_create("/tmp", 1024, 4);
+
+        int group_col_id = -1;
+        int agg_col_id = -1;
+        for (size_t i = 0; i < ast->num_select_exprs; i++) {
+            if (strcmp(ast->group_by_col, column_names[i]) == 0) {
+                group_col_id = (int)i;
+            }
+            if (ast->select_exprs[i].type == AST_AGG_SUM) {
+                agg_col_id = (int)i;
+            }
+        }
+        if (group_col_id == -1 || agg_col_id == -1) {
+            printf("Error: invalid GROUP BY or SUM column.\n");
+            return NULL;
+        }
+        op_agg->aggregate.group_by_col_idx = (size_t)group_col_id;
+        op_agg->aggregate.agg_col_idx = (size_t)agg_col_id;
+        root = op_agg;
+    }
+
+    return root;
+}
 
 
 void repl_run(table_t *db) {
@@ -275,7 +356,22 @@ void repl_run(table_t *db) {
         if (ast.stmt_type == STMT_INSERT) {
             repl_exec_insert(db, &ast);
         } else if (ast.stmt_type == STMT_SELECT) {
-            repl_exec_select(db, &ast);
+            physical_operator_t *pipeline = repl_exec_select(db, &ast);
+            if (pipeline) {
+                while (true) {
+                    block_t block = exec_pipeline_run(pipeline);
+                    if (block.num_rows == 0)
+                        break;
+                    for (size_t r = 0; r < block.num_rows; r++) {
+                        size_t idx = block.sel_vector ? block.sel_vector->data[r] : r;
+                        for (size_t c = 0; c < block.num_columns; c++) {
+                            printf("%s%d", c > 0 ? " | " : "", block.columns[c].data[idx]);
+                        }
+                        printf("\n");
+                    }
+                }
+                physical_operator_destroy(pipeline);
+            }
         }
     }
 

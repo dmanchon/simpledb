@@ -13,7 +13,7 @@
 - **Zero-Copy Memory-Mapped Storage**: `mmap` binary file format reading columns directly into memory pointers.
 - **Vectorized SIMD Selection Vectors**: Branchless query filtering generating index selection vectors with 0 CPU branch mispredictions.
 - **Zero-Copy Python Arrow Interop**: Exporting C buffers directly to PyArrow / Polars / Pandas in 0.00ms via the Arrow C Data Interface.
-- **Ultra-Lean Codebase**: Total engine targeted under **~2,500 Lines of Code (LOC)** in C11.
+- **Ultra-Lean Codebase**: Total engine targeted under **~5,000 Lines of Code (LOC)** in C11.
 
 ---
 

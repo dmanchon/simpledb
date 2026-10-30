@@ -45,6 +45,7 @@ grace_hash_agg_t *grace_hash_agg_create(const char *temp_dir, size_t mem_limit_r
     for (size_t i = 0; i < num_partitions; i++) {
         agg->partition_paths[i] = flat_buffer + (i * 256);
         snprintf(agg->partition_paths[i], 256, "%s/part_%zu.bin", temp_dir, i);
+        remove(agg->partition_paths[i]);
     }
 
     agg->num_partitions = num_partitions;
@@ -163,6 +164,8 @@ bool grace_hash_agg_next(grace_hash_agg_t *agg, agg_output_record_t *out_record)
             }
         };
         fclose(agg->partition_files[agg->current_partition_idx]);
+        agg->partition_files[agg->current_partition_idx] = NULL;
+        remove(agg->partition_paths[agg->current_partition_idx]);
         agg->current_partition_idx++;
 
     }

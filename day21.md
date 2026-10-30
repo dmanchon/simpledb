@@ -1,4 +1,12 @@
-# Day 21: The Interactive REPL CLI & Query Engine
+# Day 21: The Interactive REPL & Write Path (Dynamic Schema Evolution & Streaming NDJSON Ingestion)
+
+> [!TIP]
+> **Long-Read Engineering Log (~890 lines) — TL;DR & Fast Navigation**
+> This post is an unabridged Socratic pair-programming log capturing the architecture, C11 pointer mechanics, and edge cases encountered while building the interactive REPL and write path.
+> - **Dynamic Schema Evolution (`table_ensure_column`):** Registers newly discovered columns on the fly and immediately backfills existing in-memory rows (`table->row_count`) with default `0` or `""` so columnar arrays never become jagged.
+> - **Single-Row Point Inserts (`repl_exec_insert`):** Binds out-of-order SQL `INSERT INTO ... VALUES (...)` columns to physical schema indices in a single pass.
+> - **Streaming NDJSON Ingestion (`repl_exec_bulk_insert`):** Uses `yyjson` in two phases—an unconditional $N$-row union schema pre-scan (`rewind(fp)`) followed by bounded `1,024`-row chunked batch ingestion in $O(1)$ RAM.
+> - **Want to go straight to the code?** [Jump to the Unit Tests](#7-unit-testing-the-write-path-teststest_dbc) or [Jump to the Final C11 Implementation (`src/repl.c`)](#8-the-final-listing-srcreplc--write-path--repl-loop).
 
 Welcome to Day 21! Over the previous 20 days, we have built all the core components of a vectorized, columnar analytical database engine in C11:
 - Zero-copy memory-mapped columnar storage (Days 1–3)
@@ -363,11 +371,11 @@ To achieve high throughput without memory exhaustion, NDJSON ingestion follows a
      - *(Note: Unlike single-row `repl_exec_insert`, where `i32_vals` and `str_vals` are flat 1D arrays that require a separate `col_ptrs[c] = &i32_vals[c]` indirection array, in bulk ingestion `col_data` **is already** an array of column buffer pointers! We can pass `(const void ***)col_data` directly to `table_insert_batch` without allocating a redundant `col_ptrs` array.)*
    - Stream line-by-line using `getline()` and `yyjson_read()`:
      - Store the parsed values at `col_data[c][chunk_rows]`. If a field is missing in that specific row (sparse JSON), default to `0` or `strdup("")`.
-     - When `chunk_rows == BULK_CHUNK_SIZE` or when EOF is reached:
+     - When `chunk_rows == BULK_CHUNK_SIZE` (full chunk inside the loop) or when `EOF` is reached with `chunk_rows > 0` (incomplete tail chunk after the loop):
        - Call `table_insert_batch(db, (const void ***)col_data, num_cols, chunk_rows)`.
        - Free any heap-allocated strings from the current chunk.
        - Reset `chunk_rows = 0`.
-   - Free scratch chunk buffers and close `fp`.
+   - Free scratch chunk buffers, close `fp`, and log the updated row count (`printf("BULK INSERT (table now has %zu rows in RAM).\n", db->row_count);`) to match single-row `repl_exec_insert()`.
 
 #### Schema-Driven vs. JSON-Driven Field Binding
 
@@ -453,18 +461,7 @@ Disk parts are immutable. If `amount.bin` is missing from an older part, Day 17'
 
 ---
 
-## 7. The Mini Query Planner (`repl_exec_select`)
-
-When an `ast_query_t` of type `STMT_SELECT` is received, `repl_exec_select` translates the logical AST into a Day 18 Volcano-style physical operator pipeline:
-
-1. **Leaf Operator (`OP_SCAN`):** Gathers required columns, creates a `table_scanner_t`, and wraps it in `physical_operator_t`.
-2. **Predicate Operator (`OP_FILTER`):** If `ast->num_predicates > 0`, instantiates an `OP_FILTER` node wrapping the scanner, mapping `=, >, <` to `COMPARE_EQ, COMPARE_GT, COMPARE_LT`.
-3. **Aggregation Operator (`OP_AGGREGATE`):** If `ast->has_group_by`, wraps the filter in a Grace Hash Aggregator node (`grace_hash_agg_create("/tmp", 1024, 4)`).
-4. **Execution & Rendering:** Calls `exec_pipeline_run(root)`, iterates over the materialized `block_t`, prints a formatted ASCII table, and recursively frees the operator tree with `physical_operator_destroy(root)`.
-
----
-
-## 8. Unit Testing the REPL Execution (`tests/test_db.c`)
+## 7. Unit Testing the Write Path (`tests/test_db.c`)
 
 ### Single-Row `VALUES` vs. Multi-Row Batch Ingestion
 
@@ -580,6 +577,14 @@ static void test_repl_execution(void) {
 }
 ```
 
+When `test_repl_execution()` runs, the two single-row `VALUES` inserts hit the `printf("INSERT 1 (table now has %zu rows in RAM).\n", db->row_count);` statement at the bottom of `repl_exec_insert()`, while the 3rd block dispatches via `if (ast->is_bulk_insert)` to `repl_exec_bulk_insert()` and returns early:
+
+```text
+INSERT 1 (table now has 1 rows in RAM).
+INSERT 1 (table now has 2 rows in RAM).
+Day 21 REPL execution tests passed!
+```
+
 #### Temporary Files in C: `mkstemp()`, `tmpfile()`, and Why `tmpnam()` Was Banned
 
 When testing SQL commands that accept a file path string (`INSERT INTO ... FROM '<path>'`), choosing the right C temporary file API reveals an important piece of UNIX systems history:
@@ -597,13 +602,295 @@ When testing SQL commands that accept a file path string (`INSERT INTO ... FROM 
 
 ---
 
-## 9. Beyond Day 21: The jsonbench.com Challenge
+## 8. The Final Listing (`src/repl.c` — Write Path & REPL Loop)
 
-While `simpledb` is now a fully functional C11 columnar database, state-of-the-art analytical engines compete on massive benchmarks such as **[jsonbench.com](https://jsonbench.com)** (1 Billion JSON events totaling ~500GB from the BlueSky firehose).
+Below is the complete implementation of the Day 21 REPL write path, including dynamic schema backfilling (`table_ensure_column`), two-phase streaming NDJSON ingestion (`repl_exec_bulk_insert`), single-row semantic tuple binding (`repl_exec_insert`), and the interactive command loop (`repl_run`):
 
-To scale `simpledb` to that scale:
-1. **JSON Path Flattening:** Deeply nested JSON (`{"data": {"commit": {"repo": "..."}}}`) must be parsed and flattened into dot-notated column names (`data.commit.repo`).
-2. **SIMD Parsing (`simdjson`):** Moving from scalar parsing to AVX-512 / ARM NEON vector instructions allows parsing gigabytes of raw JSON per second directly into columnar memory.
-3. **Block-Level Compression (LZ4 / Zstandard):** Applying lightweight block compression to `.bin` columnar parts reduces disk footprint by 4x–8x, saturating NVMe bandwidth.
+```c
+#include "simpledb/repl.h"
+#include "simpledb/schema_registry.h"
+#include "simpledb/sql_parser.h"
+#include "simpledb/table.h"
+#include "yyjson.h"
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/_types/_ssize_t.h>
 
-Congratulations on completing `simpledb`!
+#define BULK_CHUNK_SIZE 1024
+#define SCHEMA_SAMPLE_ROWS 10
+
+static int32_t table_ensure_column(table_t *table, const char *name, column_type_t type) {
+    if (!table->schema) {
+        table->schema = schema_registry_create();
+    }
+    int32_t idx = schema_registry_get_column_index(table->schema, name);
+    if (idx == -1) {
+        idx = schema_registry_add_column(table->schema, name, type);
+        size_t existing_rows = table->row_count;
+        // Expand table->column_buffers to hold the new column buffer pointer
+        table->column_buffers = realloc(table->column_buffers, sizeof(void *) * table->schema->count);
+        if (type == COL_TYPE_I32) {
+            buffer_i32_t *buf = buffer_i32_create(128);
+            for (size_t r = 0; r < existing_rows; r++) {
+                buffer_i32_push(buf, 0);
+            }
+            table->column_buffers[idx] = buf;
+        } else {
+            raw_string_column_t *str_col = raw_string_column_create(existing_rows > 128 ? existing_rows * 2 : 128);
+            // Pad existing in-memory rows with default ""
+            for (size_t r = 0; r < existing_rows; r++) {
+                str_col->strings[r] = strdup("");
+            }
+            str_col->size = existing_rows;
+            table->column_buffers[idx] = str_col;
+        }
+    }
+    return idx;
+}
+
+static void repl_exec_bulk_insert(table_t *db, const char *file_path) {
+    FILE *fp = fopen(file_path, "rb");
+    if (!fp) {
+        printf("Error: failed to open file '%s'.\n", file_path);
+        return;
+    }
+    // 1. Schema inference pre-scan
+    char *line = NULL;
+    size_t cap = 0;
+    for (int i = 0; i < SCHEMA_SAMPLE_ROWS; i++) {
+        ssize_t len = getline(&line, &cap, fp);
+        if (len == -1)
+            break; // Reached EOF before sample limit
+
+        // Strip trailing CR/LF
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+        if (len == 0)
+            continue;
+
+        yyjson_doc *peek_doc = yyjson_read(line, (size_t)len, 0);
+        if (peek_doc) {
+            yyjson_val *root = yyjson_doc_get_root(peek_doc);
+            if (yyjson_is_obj(root)) {
+                size_t idx, max;
+                yyjson_val *k, *v;
+                yyjson_obj_foreach(root, idx, max, k, v) {
+                    column_type_t t = (v && yyjson_is_int(v)) ? COL_TYPE_I32 : COL_TYPE_STRING;
+                    table_ensure_column(db, yyjson_get_str(k), t);
+                }
+            }
+            yyjson_doc_free(peek_doc);
+        }
+    }
+    rewind(fp); // Reset file offset back to beginning
+
+    if (!db->schema || db->schema->count == 0) {
+        printf("Error: could not infer schema from '%s'.\n", file_path);
+        fclose(fp);
+        free(line);
+        return;
+    }
+
+    // 2. Prepare bounded chunk buffers
+    size_t num_cols = db->schema->count;
+    void **col_data = calloc(num_cols, sizeof(void *));
+
+    for (size_t c = 0; c < num_cols; c++) {
+        if (db->schema->columns[c].type == COL_TYPE_I32) {
+            col_data[c] = malloc(sizeof(int32_t) * BULK_CHUNK_SIZE);
+        } else {
+            col_data[c] = malloc(sizeof(char *) * BULK_CHUNK_SIZE);
+        }
+    }
+
+    size_t chunk_rows = 0;
+    while (true) {
+        ssize_t len = getline(&line, &cap, fp);
+        if (len == -1)
+            break;
+
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+        if (len == 0)
+            continue;
+
+        yyjson_doc *peek_doc = yyjson_read(line, (size_t)len, 0);
+        if (peek_doc) {
+            yyjson_val *root = yyjson_doc_get_root(peek_doc);
+            if (yyjson_is_obj(root)) {
+                size_t idx, max;
+                yyjson_val *k, *v;
+
+                // Reset row slots
+                for (size_t c = 0; c < num_cols; c++) {
+                    if (db->schema->columns[c].type == COL_TYPE_I32) {
+                        ((int32_t *)col_data[c])[chunk_rows] = 0;
+                    } else {
+                        ((char **)col_data[c])[chunk_rows] = NULL;
+                    }
+                }
+
+                yyjson_obj_foreach(root, idx, max, k, v) {
+                    int32_t c = schema_registry_get_column_index(db->schema, yyjson_get_str(k));
+                    if (c < 0)
+                        continue;
+                    if (db->schema->columns[c].type == COL_TYPE_I32) {
+                        ((int32_t *)col_data[c])[chunk_rows] = yyjson_is_int(v) ? (int32_t)yyjson_get_int(v) : 0;
+                    } else {
+                        const char *s = yyjson_is_str(v) ? yyjson_get_str(v) : "";
+                        ((char **)col_data[c])[chunk_rows] = strdup(s);
+                    }
+                }
+                for (size_t c = 0; c < num_cols; c++) {
+                    if (db->schema->columns[c].type != COL_TYPE_I32) {
+                        char **arr = (char **)col_data[c];
+                        if (!arr[chunk_rows]) arr[chunk_rows] = strdup("");
+                    }
+                }
+                chunk_rows++;
+            }
+            yyjson_doc_free(peek_doc);
+        }
+
+        // Flush full chunk
+        if (chunk_rows == BULK_CHUNK_SIZE) {
+            table_insert_batch(db, (const void ***)col_data, num_cols, chunk_rows);
+            for (size_t c = 0; c < num_cols; c++) {
+                if (db->schema->columns[c].type != COL_TYPE_I32) {
+                    char **arr = (char **)col_data[c];
+                    for (size_t r = 0; r < chunk_rows; r++) free(arr[r]);
+                }
+            }
+            chunk_rows = 0;
+        }
+    }
+
+    // Flush incomplete tail chunk
+    if (chunk_rows > 0) {
+        table_insert_batch(db, (const void ***)col_data, num_cols, chunk_rows);
+        for (size_t c = 0; c < num_cols; c++) {
+            if (db->schema->columns[c].type != COL_TYPE_I32) {
+                char **arr = (char **)col_data[c];
+                for (size_t r = 0; r < chunk_rows; r++) free(arr[r]);
+            }
+        }
+    }
+
+    // Cleanup
+    free(line);
+    fclose(fp);
+    for (size_t c = 0; c < num_cols; c++) free(col_data[c]);
+    free(col_data);
+}
+
+void repl_exec_insert(table_t *db, ast_query_t *ast) {
+    if (ast->is_bulk_insert) {
+        repl_exec_bulk_insert(db, ast->from_file_path);
+        return;
+    }
+
+    size_t max_cols = (db->schema ? db->schema->count : 0) + ast->num_insert_cols;
+    if (max_cols == 0) return;
+
+    int32_t *i32_vals = calloc(max_cols, sizeof(int32_t));
+    const char **str_vals = calloc(max_cols, sizeof(char *));
+    const void **col_ptrs = calloc(max_cols, sizeof(void *));
+    for (size_t c = 0; c < max_cols; c++) {
+        str_vals[c] = "";
+    }
+
+    for (size_t k = 0; k < ast->num_insert_cols; k++) {
+        column_type_t type = ast->insert_vals[k].is_string ? COL_TYPE_STRING : COL_TYPE_I32;
+        int32_t idx = table_ensure_column(db, ast->insert_cols[k], type);
+        if (idx < 0) continue;
+        if (type == COL_TYPE_I32) {
+            i32_vals[idx] = ast->insert_vals[k].int_val;
+        } else {
+            str_vals[idx] = ast->insert_vals[k].string_val;
+        }
+    }
+
+    for (size_t c = 0; c < db->schema->count; c++) {
+        if (db->schema->columns[c].type == COL_TYPE_I32) {
+            col_ptrs[c] = &i32_vals[c];
+        } else {
+            col_ptrs[c] = &str_vals[c];
+        }
+    }
+
+    int rc = table_insert_batch(db, (const void ***)col_ptrs, db->schema->count, 1);
+    if (rc == 0) {
+        printf("INSERT 1 (table now has %zu rows in RAM).\n", db->row_count);
+    } else {
+        printf("Error: insert failed.\n");
+    }
+
+    free(i32_vals);
+    free(str_vals);
+    free(col_ptrs);
+}
+
+void repl_exec_select(table_t *db, ast_query_t *ast) {
+    // Implemented in Day 22: The REPL Read Path & Query Planner
+    (void)db;
+    (void)ast;
+}
+
+void repl_run(table_t *db) {
+    if (!db)
+        return;
+
+    char *line = NULL;
+    size_t cap = 0;
+
+    while (true) {
+        printf("db> ");
+        fflush(stdout);
+
+        ssize_t num = getline(&line, &cap, stdin);
+        if (num == -1) break;
+
+        while (num > 0 && (line[num - 1] == '\n' || line[num - 1] == '\r')) {
+            line[--num] = '\0';
+        }
+
+        if (num == 0)
+            continue;
+
+        if (strcmp(line, ".exit") == 0 || strcmp(line, ".quit") == 0) {
+            break;
+        }
+
+        if (strcmp(line, ".flush") == 0) {
+            table_flush(db, ".");
+            printf("OK (flushed to disk part).\n");
+            continue;
+        }
+
+        sql_parser_t parser = sql_parser_create(line);
+        ast_query_t ast = {0};
+        if (!sql_parser_parse(&parser, &ast)) {
+            printf("Error: invalid SQL syntax.\n");
+            continue;
+        }
+        if (ast.stmt_type == STMT_INSERT) {
+            repl_exec_insert(db, &ast);
+        } else if (ast.stmt_type == STMT_SELECT) {
+            repl_exec_select(db, &ast);
+        }
+    }
+
+    free(line);
+}
+```
+
+---
+
+## 9. Next Up: Day 22 — The REPL Read Path & Query Planner
+
+With the write path, dynamic schema evolution, and streaming NDJSON ingestion complete, **Day 22** will build `repl_exec_select()`—our **Mini Query Planner** that binds logical `SELECT ... WHERE ... GROUP BY ...` ASTs into Day 18's vectorized physical execution pipeline!

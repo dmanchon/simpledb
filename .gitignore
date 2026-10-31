@@ -13,3 +13,8 @@ lib/
 # CMake user files
 CMakeUserPresets.json
 compile_commands.json
+
+# Blog sync scripts (local only)
+sync_script.py
+scripts/
+

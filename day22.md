@@ -1112,10 +1112,6 @@ void physical_operator_destroy(physical_operator_t *op) {
 
 ---
 
-> **Day 22 Branch**: View the exact code for this day at [dmanchon/simpledb (`day22`)](https://github.com/dmanchon/simpledb/tree/day22) ([diff from `day21`](https://github.com/dmanchon/simpledb/compare/day21...day22)).
-
----
-
 ## 8. Post-Mortem: macOS vs. Linux CI Portability (`clangd` Auto-Includes & `_FORTIFY_SOURCE`)
 
 When developing C11 on macOS with `clangd` (e.g., in Zed or VS Code) and pushing to an Ubuntu Linux CI runner (`gcc` with `-DCMAKE_BUILD_TYPE=Release`), two classic cross-platform traps surface:
@@ -1147,3 +1143,42 @@ if (fread(idx->marks, sizeof(int32_t), idx->header.num_marks, fp) != idx->header
     return NULL;
 }
 ```
+
+---
+
+## 9. Why Arrow Keys Print `^[[D` in a `getline()` REPL: Canonical vs. Raw Terminal Mode
+
+When running `./build/simpledb` directly in a terminal and pressing the **Left Arrow** key to move the cursor backward, the terminal prints literal escape characters instead of moving the cursor:
+
+```text
+db> insert into events values (^[^[[D^[[D^[[D
+```
+
+### Why Does This Happen?
+Our REPL loop in `src/repl.c` reads input using standard POSIX `getline(&line, &cap, stdin)`. By default, a Unix terminal (`tty`) runs in **Canonical Mode ("Cooked Mode")**, governed by the kernel's `termios` line discipline (`ICANON | ECHO`):
+
+1. **What the Kernel Line Discipline Understands:** In cooked mode, the OS kernel buffers your keystrokes until you press `Enter` (`\n`), and only interprets basic control characters like **Backspace** (`0x7F` / `\b`), `Ctrl+U` (clear line), and `Ctrl+W` (delete word).
+2. **What Arrow Keys Actually Send:** Pressing an arrow key does not send a single "move cursor" command—it sends a 3-byte **ANSI VT100 escape sequence** over `stdin`:
+   * **Up Arrow:** `ESC [ A` (`\x1b[A`, echoed as `^[[A`)
+   * **Down Arrow:** `ESC [ B` (`\x1b[B`, echoed as `^[[B`)
+   * **Right Arrow:** `ESC [ C` (`\x1b[C`, echoed as `^[[C`)
+   * **Left Arrow:** `ESC [ D` (`\x1b[D`, echoed as `^[[D`)
+3. Because the kernel's cooked-mode driver does not parse multi-byte ANSI escape sequences, it simply echoes the raw bytes (`^[` for `ESC`, followed by `[D`) straight to the screen and appends them to the `stdin` buffer!
+
+### 3 Ways to Get Full Cursor Movement & Command History
+
+1. **Zero-Code Wrapper (`rlwrap`)**:
+   Wrap the binary invocation with `rlwrap` (Readline Wrapper), which intercepts keystrokes in raw mode before forwarding completed lines to `simpledb`'s `stdin`:
+   ```sh
+   brew install rlwrap   # or apt install rlwrap
+   rlwrap ./build/simpledb
+   ```
+2. **Embed `linenoise` (The Redis / ClickHouse Approach)**:
+   Instead of heavy dependencies like GNU `readline` or `ncurses`, lightweight C systems (like Redis and SQLite) vendor Salvatore Sanfilippo's single-file [**`linenoise.c` / `linenoise.h`**](https://github.com/antirez/linenoise) (~1,000 lines of zero-dependency C) and replace `getline()` with `linenoise("db> ")` and `linenoiseHistoryAdd(line)`.
+3. **Link System `libedit` / `readline`**:
+   macOS and Linux ship with `editline` (`<histedit.h>` or `<editline/readline.h>`, linked via `-ledit`), which provides `readline("db> ")` and `add_history(line)` in ~5 lines of C.
+
+---
+
+> **Day 22 Branch**: View the exact code for this day at [dmanchon/simpledb (`day22`)](https://github.com/dmanchon/simpledb/tree/day22) ([diff from `day21`](https://github.com/dmanchon/simpledb/compare/day21...day22)).
+

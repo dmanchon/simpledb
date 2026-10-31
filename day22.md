@@ -1,5 +1,7 @@
 # Day 22: The REPL Read Path & Query Planner (Binding SQL `SELECT` to the Vectorized Pipeline)
 
+> **Day 22 Branch**: View the exact code for this day at [dmanchon/simpledb (`day22`)](https://github.com/dmanchon/simpledb/tree/day22) ([diff from `day21`](https://github.com/dmanchon/simpledb/compare/day21...day22)).
+
 > [!TIP]
 > **Long-Read Engineering Log — TL;DR & Fast Navigation**
 > This post is an unabridged Socratic pair-programming log capturing the architecture, C11 pointer mechanics, and paging edge cases encountered while building the REPL Read Path and Query Planner.
@@ -639,7 +641,7 @@ Below is the complete C11 implementation of the Day 22 Read Path Query Planner (
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <sys/_types/_ssize_t.h>
+#include <sys/types.h>
 
 #define BULK_CHUNK_SIZE 1024
 #define SCHEMA_SAMPLE_ROWS 10
@@ -1105,5 +1107,43 @@ void physical_operator_destroy(physical_operator_t *op) {
     if (op->children)
         free(op->children);
     free(op);
+}
+```
+
+---
+
+> **Day 22 Branch**: View the exact code for this day at [dmanchon/simpledb (`day22`)](https://github.com/dmanchon/simpledb/tree/day22) ([diff from `day21`](https://github.com/dmanchon/simpledb/compare/day21...day22)).
+
+---
+
+## 8. Post-Mortem: macOS vs. Linux CI Portability (`clangd` Auto-Includes & `_FORTIFY_SOURCE`)
+
+When developing C11 on macOS with `clangd` (e.g., in Zed or VS Code) and pushing to an Ubuntu Linux CI runner (`gcc` with `-DCMAKE_BUILD_TYPE=Release`), two classic cross-platform traps surface:
+
+### 1. Apple SDK Private Implementation Headers (`sys/_pthread/...`, `_string.h`, `_abort.h`)
+On macOS, standard POSIX/C11 headers like `<pthread.h>`, `<string.h>`, `<stdlib.h>`, and `<sys/types.h>` internally split their declarations across private underscore-prefixed headers inside the Apple SDK. When `clangd` auto-imports a symbol such as `pthread_rwlock_t`, `ssize_t`, `memcpy`, or `abort()`, it sometimes inserts the physical sub-header where the symbol lives on Darwin rather than the public standard header:
+
+* `#include <sys/_pthread/_pthread_rwlock_t.h>` in `src/table.c` (covered by standard `#include <pthread.h>`)
+* `#include <_string.h>` in `src/external_sort.c` (covered by standard `#include <string.h>`)
+* `#include <_abort.h>` in `src/table_scanner.c` (covered by standard `#include <stdlib.h>`)
+* `#include <sys/_types/_ssize_t.h>` in `src/repl.c` (should be standard POSIX `#include <sys/types.h>`)
+
+These underscore-prefixed headers do not exist in Linux `glibc`, causing an immediate `fatal error: No such file or directory` in CI. Always strip Darwin-internal underscore headers and rely strictly on the portable C11 / POSIX headers.
+
+### 2. `glibc` `_FORTIFY_SOURCE` and `-Wunused-result` on `fread`
+When CMake builds with `-DCMAKE_BUILD_TYPE=Release` (`-O3`) on Ubuntu GCC, `glibc` enables `_FORTIFY_SOURCE`, which annotates `fread()` with `__attribute__((warn_unused_result))`. Ignoring the return value of `fread()` triggers `-Wunused-result` warnings (and risks operating on uninitialized memory if an index file on disk is truncated). Wrapping `fread` in an explicit item-count check resolves the warning and hardens disk I/O:
+
+```c
+if (fread(&idx->header, sizeof(sparse_index_file_header_t), 1, fp) != 1) {
+    fclose(fp);
+    free(idx);
+    return NULL;
+}
+
+if (fread(idx->marks, sizeof(int32_t), idx->header.num_marks, fp) != idx->header.num_marks) {
+    fclose(fp);
+    free(idx->marks);
+    free(idx);
+    return NULL;
 }
 ```

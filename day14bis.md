@@ -1,5 +1,7 @@
 # Day 14 Bis: Table Flush & Immutable Part Serialization
 
+> **Day 14 Bis Branch**: View the exact code for this day at [dmanchon/simpledb (`day14bis`)](https://github.com/dmanchon/simpledb/tree/day14bis) ([diff from `day14`](https://github.com/dmanchon/simpledb/compare/day14...day14bis)).
+
 > [!TIP]
 > **Long-Read Engineering Log (~1,145 lines) — TL;DR & Fast Navigation**
 > This post is an unabridged Socratic pair-programming log covering the serialization of in-memory columnar buffers into immutable ClickHouse-style disk parts (`table_flush`).
@@ -1149,3 +1151,7 @@ void **table_get_active_buffer(table_t *table, size_t *out_row_count) {
     return table->column_buffers;
 }
 ```
+
+---
+
+> **Day 14 Bis Branch**: View the exact code for this day at [dmanchon/simpledb (`day14bis`)](https://github.com/dmanchon/simpledb/tree/day14bis) ([diff from `day14`](https://github.com/dmanchon/simpledb/compare/day14...day14bis)).

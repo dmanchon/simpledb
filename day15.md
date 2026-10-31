@@ -1,5 +1,7 @@
 # Day 15: External Merge Sort (Disk-Spilling ORDER BY)
 
+> **Day 15 Branch**: View the exact code for this day at [dmanchon/simpledb (`day15`)](https://github.com/dmanchon/simpledb/tree/day15) ([diff from `day14bis`](https://github.com/dmanchon/simpledb/compare/day14bis...day15)).
+
 > [!TIP]
 > **Long-Read Engineering Log (~3,040 lines) — TL;DR & Fast Navigation**
 > This post is our deepest Socratic systems log, capturing every C11 pointer nuance, tournament heap invariant, and file-descriptor edge case in out-of-core External Merge Sort.
@@ -2837,7 +2839,6 @@ bool min_heap_replace_top(min_heap_t *heap, int64_t key, void *payload) {
 ```c
 #include "simpledb/external_sort.h"
 #include "simpledb/min_heap.h"
-#include <_string.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -3044,5 +3045,7 @@ bool external_sorter_next(external_sorter_t *sorter, sort_record_t *out_record) 
 }
 ```
 
+---
 
+> **Day 15 Branch**: View the exact code for this day at [dmanchon/simpledb (`day15`)](https://github.com/dmanchon/simpledb/tree/day15) ([diff from `day14bis`](https://github.com/dmanchon/simpledb/compare/day14bis...day15)).
 

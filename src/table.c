@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/_pthread/_pthread_rwlock_t.h>
 #include <sys/stat.h>
 
 table_t *table_create(const char *name) {

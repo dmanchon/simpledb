@@ -1,3 +1,6 @@
+# Day 7: Bitmaps & Dynamic Schema Registry
+
+> **Day 7 Branch**: View the exact code for this day at [dmanchon/simpledb (`day7`)](https://github.com/dmanchon/simpledb/tree/day7) ([diff from `day6`](https://github.com/dmanchon/simpledb/compare/day6...day7)).
 
 In analytical databases, handling missing or `NULL` data efficiently is important. Storing a dedicated flag per value (like a boolean array) wastes significant memory bandwidth. Similarly, ingesting modern data often involves semi-structured, schema-less formats like JSON, requiring the database to discover and manage schemas dynamically on the fly.
 
@@ -74,27 +77,27 @@ To implement the bitmap and schema registry, you will need to implement the foll
 ```c
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdbool.h>
 
 typedef struct {
-    uint8_t* bits;
-    size_t   size;      // Number of tracked bits (rows)
-    size_t   capacity;  // Allocated capacity in bytes
+    uint8_t *bits;
+    size_t size;     // Number of tracked bits
+    size_t capacity; // Allocated capacity in bytes
 } bitmap_t;
 
-bitmap_t* bitmap_create(size_t initial_capacity_bytes);
-void           bitmap_free(bitmap_t* bitmap);
+bitmap_t *bitmap_create(size_t initial_capacity_bytes);
+void bitmap_free(bitmap_t *bitmap);
 
-// Set the bit at `index` to 1 (meaning the value IS NULL)
-void bitmap_set_null(bitmap_t* bitmap, size_t index);
+// Set the bit at `index` to 1
+void bitmap_set(bitmap_t *bitmap, size_t index);
 
-// Set the bit at `index` to 0 (meaning the value is NOT NULL)
-void bitmap_clear_null(bitmap_t* bitmap, size_t index);
+// Set the bit at `index` to 0
+void bitmap_clear(bitmap_t *bitmap, size_t index);
 
-// Check if the value at `index` is NULL
-bool bitmap_is_null(const bitmap_t* bitmap, size_t index);
+// Check if the bit at `index` is 1
+bool bitmap_is_set(const bitmap_t *bitmap, size_t index);
 ```
 
 ### `schema_registry.h`
@@ -190,25 +193,33 @@ void bitmap_free(bitmap_t *bitmap) {
     free(bitmap);
 }
 
-void bitmap_set_null(bitmap_t *bitmap, size_t index) {
+void bitmap_set(bitmap_t *bitmap, size_t index) {
     size_t slot = index / 8;
-    if(slot >= bitmap->capacity) {
-        fprintf(stderr, "[FATAL ERROR] bitmap index out of bounds\n");
-        exit(EXIT_FAILURE);
+    if (slot >= bitmap->capacity) {
+        size_t new_capacity = (slot + 1) * 2;
+        bitmap->bits = realloc(bitmap->bits, new_capacity);
+        if (!bitmap->bits) {
+            fprintf(stderr, "[FATAL ERROR] bitmap_set failed to realloc\n");
+            exit(EXIT_FAILURE);
+        }
+        for (size_t i = bitmap->capacity; i < new_capacity; i++) {
+            bitmap->bits[i] = 0;
+        }
+        bitmap->capacity = new_capacity;
     }
-    bitmap->bits[slot] |= 1<<(index%8);
+    bitmap->bits[slot] |= 1 << (index % 8);
 }
 
-void bitmap_clear_null(bitmap_t *bitmap, size_t index) {
+void bitmap_clear(bitmap_t *bitmap, size_t index) {
     size_t slot = index / 8;
     if(slot >= bitmap->capacity) {
-        fprintf(stderr, "[FATAL ERROR] bitmap index out of bounds\n");
+        fprintf(stderr, "[FATAL ERROR] null_bitmap index out of bounds\n");
         exit(EXIT_FAILURE);
     }
     bitmap->bits[slot] &= ~(1<<(index%8));
 }
 
-bool bitmap_is_null(const bitmap_t *bitmap, size_t index) {
+bool bitmap_is_set(const bitmap_t *bitmap, size_t index) {
     size_t slot = index / 8;
     if(slot >= bitmap->capacity) {
         return false;
@@ -303,28 +314,28 @@ Here is the test harness you can use to verify your implementations of the bitma
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
-#include "bitmap.h"
-#include "schema_registry.h"
+#include "simpledb/bitmap.h"
+#include "simpledb/schema_registry.h"
 
-void test_bitmap() {
+void test_bitmap(void) {
     printf("Testing Bitmap...\n");
     bitmap_t* bmp = bitmap_create(8); // 8 bytes = 64 bits
     
     // Initially everything should be NOT NULL (0) if zero-initialized
-    assert(bitmap_is_null(bmp, 5) == false);
+    assert(bitmap_is_set(bmp, 5) == false);
     
-    bitmap_set_null(bmp, 5);
-    assert(bitmap_is_null(bmp, 5) == true);
-    assert(bitmap_is_null(bmp, 4) == false);
+    bitmap_set(bmp, 5);
+    assert(bitmap_is_set(bmp, 5) == true);
+    assert(bitmap_is_set(bmp, 4) == false);
     
-    bitmap_clear_null(bmp, 5);
-    assert(bitmap_is_null(bmp, 5) == false);
+    bitmap_clear(bmp, 5);
+    assert(bitmap_is_set(bmp, 5) == false);
     
     bitmap_free(bmp);
     printf("Bitmap tests passed!\n");
 }
 
-void test_schema_registry() {
+void test_schema_registry(void) {
     printf("Testing Schema Registry...\n");
     schema_registry_t* reg = schema_registry_create();
     
@@ -345,10 +356,14 @@ void test_schema_registry() {
     printf("Schema Registry tests passed!\n");
 }
 
-int main() {
+int main(void) {
     test_bitmap();
     test_schema_registry();
     printf("All Day 7 tests passed!\n");
     return 0;
 }
 ```
+
+---
+
+> **Day 7 Branch**: View the exact code for this day at [dmanchon/simpledb (`day7`)](https://github.com/dmanchon/simpledb/tree/day7) ([diff from `day6`](https://github.com/dmanchon/simpledb/compare/day6...day7)).

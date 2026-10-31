@@ -1,3 +1,6 @@
+# Day 1: 64-Byte SIMD Alignment & Dynamic Column Buffers
+
+> **Day 1 Branch**: View the exact code for this day on GitHub at [dmanchon/simpledb (`day1`)](https://github.com/dmanchon/simpledb/tree/day1).
 
 Analytical database engines like ClickHouse, DuckDB, and MonetDB scan billions of rows per second by aligning memory layouts with hardware cache architecture. In `simpledb`, the foundation begins with 64-byte aligned dynamic column buffers.
 
@@ -87,15 +90,32 @@ To preserve instruction cache (I-Cache) density during execution loops, vector p
 
 ```c
 // [include/simpledb/allocator.h]
-typedef struct {
-    int32_t *data;
+#pragma once
+
+#include <stddef.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define SIMD_ALIGNMENT 64
+
+typedef struct buffer_i32_t {
     size_t size;
     size_t capacity;
+    int32_t *data;
 } buffer_i32_t;
 
-void buffer_i32_grow(buffer_i32_t* buf);
+// Cold path functions (Declared in header, implemented in src/allocator.c)
+void* aligned_malloc(size_t bytes);
+void  aligned_free(void* ptr);
 
-// Inlined hot path for element insertion
+buffer_i32_t* buffer_i32_create(size_t initial_capacity);
+void          buffer_i32_free(buffer_i32_t* buf);
+void          buffer_i32_grow(buffer_i32_t* buf);
+
+// Hot path function (Kept static inline in header for zero call overhead in loops)
 static inline bool buffer_i32_push(buffer_i32_t* buf, int32_t val) {
     if (!buf) return false;
 
@@ -106,18 +126,109 @@ static inline bool buffer_i32_push(buffer_i32_t* buf, int32_t val) {
     buf->data[buf->size++] = val;
     return true;
 }
+```
 
-// [src/allocator.c]
-// Out-of-line cold path for capacity growth
-void buffer_i32_grow(buffer_i32_t* buf) {
-    size_t new_capacity = (buf->capacity == 0) ? 16 : buf->capacity * 2;
-    int32_t* new_data = (int32_t*) aligned_malloc(new_capacity * sizeof(int32_t));
-    if (!new_data) {
-        fprintf(stderr, "[simpledb error] Cannot grow buffer from %zu to %zu\n", buf->size, new_capacity);
+By separating `buffer_i32_grow` into a standalone function in `src/allocator.c`, the generated assembly inside `buffer_i32_push` remains compact, allowing CPU instruction caches to hold inner loop bodies without instruction eviction.
+
+---
+
+## 5. Unit Test Verification
+
+```c
+// [tests/test_db.c]
+static void test_allocator(void) {
+    void* ptr = aligned_malloc(1024);
+    assert(ptr != NULL);
+    assert(((uintptr_t)ptr % 64) == 0 && "Memory must be 64-byte aligned");
+    aligned_free(ptr);
+
+    buffer_i32_t* buf = buffer_i32_create(4);
+    assert(buf != NULL);
+    assert(((uintptr_t)buf->data % 64) == 0 && "Buffer array must be 64-byte aligned");
+    assert(buf->size == 0);
+    assert(buf->capacity == 4);
+
+    for (int i = 0; i < 1000; i++) {
+        bool ok = buffer_i32_push(buf, i * 10);
+        assert(ok);
+        (void)ok;
+    }
+
+    assert(buf->size == 1000);
+    assert(buf->capacity >= 1000);
+    assert(buf->data[500] == 5000);
+
+    buffer_i32_free(buf);
+}
+```
+
+---
+
+## 6. Final Implementation (`src/allocator.c`)
+
+```c
+#include "simpledb/allocator.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+void *aligned_malloc(size_t bytes) {
+    if (bytes == 0) {
+        return NULL;
+    }
+    void *buffer = NULL;
+
+    int status = posix_memalign(&buffer, SIMD_ALIGNMENT, bytes);
+
+    if (status != 0) {
+        fprintf(stderr,
+                "[FATAL ERROR] aligned_malloc failed to allocate %zu bytes (code: %d)\n",
+                bytes, status);
         exit(EXIT_FAILURE);
     }
-    if (buf->data && buf->size > 0) {
-        memcpy(new_data, buf->data, buf->size * sizeof(int32_t));
+    return buffer;
+}
+
+void aligned_free(void *ptr) {
+    if (ptr) {
+        free(ptr);
+    }
+}
+
+buffer_i32_t *buffer_i32_create(size_t initial_capacity) {
+    if (initial_capacity == 0) {
+        initial_capacity = 16;
+    }
+
+    buffer_i32_t *buf = (buffer_i32_t *)malloc(sizeof(buffer_i32_t));
+    if (!buf) {
+        return NULL;
+    }
+
+    buf->data = (int32_t *)aligned_malloc(initial_capacity * sizeof(int32_t));
+    buf->capacity = initial_capacity;
+    buf->size = 0;
+    return buf;
+}
+
+void buffer_i32_free(buffer_i32_t *buf) {
+    if (buf) {
+        if (buf->data) {
+            aligned_free(buf->data);
+            buf->data = NULL;
+        }
+        free(buf);
+    }
+}
+
+void buffer_i32_grow(buffer_i32_t *buf) {
+    if (!buf) return;
+    size_t new_capacity = (buf->capacity == 0) ? 16 : buf->capacity * 2;
+    int32_t *new_data = (int32_t *)aligned_malloc(new_capacity * sizeof(int32_t));
+    if (buf->data) {
+        if (buf->size > 0) {
+            memcpy(new_data, buf->data, buf->size * sizeof(int32_t));
+        }
         aligned_free(buf->data);
     }
     buf->data = new_data;
@@ -125,8 +236,6 @@ void buffer_i32_grow(buffer_i32_t* buf) {
 }
 ```
 
-By separating `buffer_i32_grow` into a standalone function in `src/allocator.c`, the generated assembly inside `buffer_i32_push` remains compact, allowing CPU instruction caches to hold inner loop bodies without instruction eviction.
-
 ---
 
-> **Source Code**: The full C11 codebase for this project is available on GitHub at [dmanchon/simpledb](https://github.com/dmanchon/simpledb).
+> **Day 1 Branch**: View the exact code for this day on GitHub at [dmanchon/simpledb (`day1`)](https://github.com/dmanchon/simpledb/tree/day1).

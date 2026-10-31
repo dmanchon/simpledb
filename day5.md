@@ -1,3 +1,6 @@
+# Day 5: Column Vectors, Selection Vectors and Branchless Filtering
+
+> **Day 5 Branch**: View the exact code for this day at [dmanchon/simpledb (`day5`)](https://github.com/dmanchon/simpledb/tree/day5) ([diff from `day4`](https://github.com/dmanchon/simpledb/compare/day4...day5)).
 
 In analytical query processing, filtering operations determine which rows satisfy specific predicates. In `simpledb`, query filters rely on selection vectors (`selection_vector_t`) and branchless comparison kernels to eliminate branch misprediction penalties and defer column copying until late materialization.
 
@@ -38,6 +41,15 @@ Column Vector ──► [ filter_gt_i32 ] ──► Selection Vector [14, 82, 10
 Rather than creating a redundant struct and duplicating allocation logic, `simpledb` leverages the existing 64-byte aligned dynamic array buffer (`buffer_i32_t`) built on Day 1.
 
 ```c
+// [include/simpledb/filter.h]
+#pragma once
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include "simpledb/allocator.h"
+#include "simpledb/slice.h"
+
 // selection_vector_t is a semantic type alias for buffer_i32_t
 typedef buffer_i32_t selection_vector_t;
 
@@ -56,6 +68,12 @@ static inline void selection_vector_clear(selection_vector_t* sel) {
 static inline int32_t selection_vector_at(const selection_vector_t* sel, size_t idx) {
     return sel->data[idx];
 }
+
+// Branchless Filter Kernel: Appends row indices where src[i] > target
+bool filter_gt_i32(slice_i32_t src, int32_t target, selection_vector_t* out_sel);
+
+// Zero-Copy Gather Operator: Extracts values at selected row indices into out_buf
+bool gather_i32(slice_i32_t src, const selection_vector_t* sel, buffer_i32_t* out_buf);
 ```
 
 Reusing `buffer_i32_t` directly means zero code duplication: `selection_vector_t` inherits 64-byte `aligned_malloc` alignment, 2x capacity growth, and the full inline push API without writing a single extra struct or allocator.
@@ -172,4 +190,4 @@ Establishing `selection_vector_t` on Day 5 provides the foundational building bl
 
 ---
 
-> **Source Code**: The full C11 codebase for this project is available on GitHub at [dmanchon/simpledb](https://github.com/dmanchon/simpledb).
+> **Day 5 Branch**: View the exact code for this day at [dmanchon/simpledb (`day5`)](https://github.com/dmanchon/simpledb/tree/day5) ([diff from `day4`](https://github.com/dmanchon/simpledb/compare/day4...day5)).

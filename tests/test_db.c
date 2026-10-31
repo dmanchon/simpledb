@@ -612,11 +612,11 @@ void test_table_e2e_batch_ingestion(void) {
     const char* b1_countries[] = { "US", "ES", "US" };
     const char* b1_comments[]  = { "First event", "Second event", "Third event" };
 
-    const void** batch1[4];
-    batch1[0] = (const void*)b1_user_ids;
-    batch1[1] = (const void*)b1_scores;
-    batch1[2] = (const void*)b1_countries;
-    batch1[3] = (const void*)b1_comments;
+    const void* batch1[4];
+    batch1[0] = b1_user_ids;
+    batch1[1] = b1_scores;
+    batch1[2] = b1_countries;
+    batch1[3] = b1_comments;
 
     int rc = table_insert_batch(table, (const void***)batch1, 4, 3);
     assert(rc == 0);
@@ -628,11 +628,11 @@ void test_table_e2e_batch_ingestion(void) {
     const char* b2_countries[] = { "FR", "ES" };
     const char* b2_comments[]  = { "Fourth event", "Fifth event" };
 
-    const void** batch2[4];
-    batch2[0] = (const void*)b2_user_ids;
-    batch2[1] = (const void*)b2_scores;
-    batch2[2] = (const void*)b2_countries;
-    batch2[3] = (const void*)b2_comments;
+    const void* batch2[4];
+    batch2[0] = b2_user_ids;
+    batch2[1] = b2_scores;
+    batch2[2] = b2_countries;
+    batch2[3] = b2_comments;
 
     rc = table_insert_batch(table, (const void***)batch2, 4, 2);
     assert(rc == 0);
@@ -700,11 +700,11 @@ static void test_table_flush_e2e(void) {
     const char *countries[] = { "US", "UK", "US" };
     const char *comments[] = { "alpha", "beta", "gamma" };
 
-    const void **batch[4];
-    batch[0] = (const void *)user_ids;
-    batch[1] = (const void *)scores;
-    batch[2] = (const void *)countries;
-    batch[3] = (const void *)comments;
+    const void *batch[4];
+    batch[0] = user_ids;
+    batch[1] = scores;
+    batch[2] = countries;
+    batch[3] = comments;
 
     int rc_batch = table_insert_batch(table, (const void ***)batch, 4, 3);
     assert(rc_batch == 0);
@@ -971,7 +971,7 @@ static void test_table_scanner(void) {
     int32_t cpu_vals[] = { 10, 20, 30 };
     int32_t ram_vals[] = { 100, 200, 300 };
     const void* batch1[] = { cpu_vals, ram_vals };
-    table_insert_batch(table, batch1, 2, 3);
+    table_insert_batch(table, (const void ***)batch1, 2, 3);
 
     // 3. (Mock) Flush to part 0
     // In a real test, we would call table_flush(table, "."), but we assume it's mocked here
@@ -1003,7 +1003,7 @@ static void test_table_scanner(void) {
     printf("Table Scanner tests passed!\n");
 }
 
-int test_exec_pipeline() {
+int test_exec_pipeline(void) {
     // 1. Setup a Mock Table
     schema_registry_t* schema = schema_registry_create();
     schema_registry_add_column(schema, "user_id", COL_TYPE_I32);
@@ -1110,9 +1110,9 @@ void test_part_merger(void) {
     // 2. Insert Data and Flush to create Part 1 (simulate batch 1)
     int32_t users1[] = {1, 2};
     int32_t amounts1[] = {100, 200};
-    const void **batch1[2];
-    batch1[0] = (const void*)users1;
-    batch1[1] = (const void*)amounts1;
+    const void *batch1[2];
+    batch1[0] = users1;
+    batch1[1] = amounts1;
     
     int rc_batch1 = table_insert_batch(table, (const void ***)batch1, 2, 2);
     assert(rc_batch1 == 0);
@@ -1122,9 +1122,9 @@ void test_part_merger(void) {
     // 3. Insert Data and Flush to create Part 2 (simulate batch 2)
     int32_t users2[] = {3, 4};
     int32_t amounts2[] = {300, 400};
-    const void **batch2[2];
-    batch2[0] = (const void*)users2;
-    batch2[1] = (const void*)amounts2;
+    const void *batch2[2];
+    batch2[0] = users2;
+    batch2[1] = amounts2;
     
     int rc_batch2 = table_insert_batch(table, (const void ***)batch2, 2, 2);
     assert(rc_batch2 == 0);

@@ -1,5 +1,7 @@
 # Day 13: Deletion Vectors
 
+> **Day 13 Branch**: View the exact code for this day at [dmanchon/simpledb (`day13`)](https://github.com/dmanchon/simpledb/tree/day13) ([diff from `day12`](https://github.com/dmanchon/simpledb/compare/day12...day13)).
+
 > [!TIP]
 > **Long-Read Engineering Log (~650 lines) — TL;DR & Fast Navigation**
 > This post is an unabridged Socratic pair-programming log capturing the architecture, bitwise arithmetic, and memory layout of Roaring-style Deletion Vectors in C11.
@@ -39,11 +41,12 @@ We will use a 2-level Roaring structure. A row ID (32-bit integer) is split into
 - The **Low 16 bits** act as the "Value" stored inside that container.
 
 ```c
-#ifndef DELETION_VECTOR_H
-#define DELETION_VECTOR_H
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
+
+#define DV_INITIAL_CAPACITY 16
 
 // Roaring Container Types
 typedef enum {
@@ -55,6 +58,7 @@ typedef enum {
 typedef struct {
     container_type_t type;
     uint16_t cardinality;
+    uint32_t capacity;
     void *data; // Pointer to the underlying array, bitmap, or run data
 } roaring_container_t;
 
@@ -84,11 +88,9 @@ uint64_t deletion_vector_get_cardinality(const deletion_vector_t *dv);
 
 bool deletion_vector_is_deleted(const deletion_vector_t *dv, uint32_t row_id);
 
-// Fetches a flat 64-bit bitmask of deleted rows starting at `start_row`.
+// Returns a flat 64-bit bitmask of deleted rows starting at `start_row`.
 // Used by SIMD execution pipelines (AND NOT) to filter vector blocks!
-void deletion_vector_get_simd_mask(const deletion_vector_t *dv, uint32_t start_row, uint64_t *out_mask);
-
-#endif // DELETION_VECTOR_H
+uint64_t deletion_vector_get_simd_mask(const deletion_vector_t *dv, uint32_t start_row);
 ```
 
 ### 2. Deep Dive: The Three Container Types
@@ -653,3 +655,7 @@ uint64_t deletion_vector_get_simd_mask(const deletion_vector_t *dv, uint32_t sta
     return 0;
 }
 ```
+
+---
+
+> **Day 13 Branch**: View the exact code for this day at [dmanchon/simpledb (`day13`)](https://github.com/dmanchon/simpledb/tree/day13) ([diff from `day12`](https://github.com/dmanchon/simpledb/compare/day12...day13)).

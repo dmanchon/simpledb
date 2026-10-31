@@ -1,3 +1,6 @@
+# Day 8: SIMD APL Vector Primitives (Compress & Reduction)
+
+> **Day 8 Branch**: View the exact code for this day at [dmanchon/simpledb (`day8`)](https://github.com/dmanchon/simpledb/tree/day8) ([diff from `day7`](https://github.com/dmanchon/simpledb/compare/day7...day8)).
 
 In APL and K/q, the fundamental way to filter data isn't with `for` loops and `if` statements—it's with an operator called **Compress** (often written as `X / Y` or `where X`). 
 
@@ -147,3 +150,7 @@ int main() {
     return 0;
 }
 ```
+
+---
+
+> **Day 8 Branch**: View the exact code for this day at [dmanchon/simpledb (`day8`)](https://github.com/dmanchon/simpledb/tree/day8) ([diff from `day7`](https://github.com/dmanchon/simpledb/compare/day7...day8)).

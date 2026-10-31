@@ -1,6 +1,5 @@
 #include "simpledb/external_sort.h"
 #include "simpledb/min_heap.h"
-#include <_string.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

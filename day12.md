@@ -1,5 +1,7 @@
 # Day 12: Free Text Search & High Cardinality Architecture
 
+> **Day 12 Branch**: View the exact code for this day at [dmanchon/simpledb (`day12`)](https://github.com/dmanchon/simpledb/tree/day12) ([diff from `day11`](https://github.com/dmanchon/simpledb/compare/day11...day12)).
+
 ### Implementation Status: The 1,000 LOC Milestone
 As of this day, our entire SimpleDB engine (Zero-Copy MMap, Vectorized SIMD Filters, Sparse Indexing, Dictionary Encoding, and Raw Columnar Storage) fits into exactly **973 lines of C11 code** (excluding tests and blanks). This proves that columnar engines are not bloated; their performance comes from data-layout and memory access patterns, not millions of lines of code.
 
@@ -276,12 +278,51 @@ To fix the limitations above without importing a massive library like ICU, we ca
 Since UTF-8 characters always have their high bit set (ASCII values >= 128), we can blindly accept all bytes `>= 128` as valid token characters! We can also explicitly whitelist hyphens and apostrophes.
 
 ```c
+// src/tokenizer.c
+#include "simpledb/tokenizer.h"
+#include <ctype.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+tokenizer_t tokenizer_create(const char *input, size_t input_len) {
+    tokenizer_t tokenizer = {.input = input, .input_len = input_len, .current_pos = 0};
+    return tokenizer;
+}
+
 static bool is_token_char(char c) {
     unsigned char uc = (unsigned char)c;
     if (isalnum(uc)) return true;
     if (uc == '\'' || uc == '-') return true; // Keep don't and state-of-the-art
     if (uc >= 128) return true; // Blindly accept all UTF-8 multi-byte chars!
     return false;
+}
+
+int tokenizer_next(tokenizer_t *tokenizer, token_t *out_token) {
+    if (!tokenizer || !out_token || !tokenizer->input)
+        return 0;
+
+    while (tokenizer->current_pos < tokenizer->input_len &&
+           !is_token_char(tokenizer->input[tokenizer->current_pos])) {
+        tokenizer->current_pos++;
+    }
+
+    if (tokenizer->current_pos >= tokenizer->input_len) {
+        return 0;
+    }
+
+    size_t start_pos = tokenizer->current_pos;
+
+    while (tokenizer->current_pos < tokenizer->input_len &&
+           is_token_char(tokenizer->input[tokenizer->current_pos])) {
+        tokenizer->current_pos++;
+    }
+
+    out_token->text = tokenizer->input + start_pos;
+    out_token->len = tokenizer->current_pos - start_pos;
+
+    return 1;
 }
 ```
 ## Part 3: The Data Skipping Index (Granule Bitmaps)
@@ -295,15 +336,19 @@ By mapping `Term -> Bitmap of Granules`, our index is incredibly tiny (using alm
 
 ### The Header (`include/simpledb/fts.h`)
 ```c
-#ifndef SIMPLEDB_FTS_H
-#define SIMPLEDB_FTS_H
+#pragma once
 
+#include <stdint.h>
+#include <stddef.h>
 #include "simpledb/bitmap.h"
+#include "simpledb/string_dict.h"
+
+#define FTS_INITIAL_CAPACITY 25000
 
 // Basic Inverted Index mapping a string term to a bitmap of Granules (ClickHouse style)
 typedef struct {
-    char** terms;          // Array of unique terms
     bitmap_t** postings;   // Array of pointers to bitmaps (1 bitmap per term)
+    string_dict_t* map;
     size_t num_terms;
     size_t capacity;
 } inverted_index_t;
@@ -311,8 +356,7 @@ typedef struct {
 inverted_index_t* inverted_index_create(void);
 void inverted_index_add_document(inverted_index_t* idx, const char* text, size_t granule_id);
 bitmap_t* inverted_index_search(inverted_index_t* idx, const char* term);
-
-#endif
+void inverted_index_free(inverted_index_t* idx);
 ```
 
 > **Student Question:** When writing the constructor, I did `malloc(sizeof(bitmap_t) * 16)` instead of `sizeof(bitmap_t*)`, but the compiler didn't throw a type error! Can we force C to warn us about this?
@@ -383,11 +427,11 @@ Here is our final, highly-optimized C implementation for the Inverted Index:
 
 inverted_index_t *inverted_index_create(void) {
     inverted_index_t *index = malloc(sizeof(inverted_index_t));
-    index->capacity = INITIAL_CAPACITY;
+    index->capacity = FTS_INITIAL_CAPACITY;
     index->map = string_dict_create();
     index->num_terms = 0;
     // CRITICAL: use calloc so all bitmap pointers start as NULL!
-    index->postings = calloc(sizeof(*(index->postings)), INITIAL_CAPACITY);
+    index->postings = calloc(sizeof(*(index->postings)), FTS_INITIAL_CAPACITY);
     return index;
 }
 
@@ -458,3 +502,7 @@ void inverted_index_free(inverted_index_t *idx) {
     free(idx);
 }
 ```
+
+---
+
+> **Day 12 Branch**: View the exact code for this day at [dmanchon/simpledb (`day12`)](https://github.com/dmanchon/simpledb/tree/day12) ([diff from `day11`](https://github.com/dmanchon/simpledb/compare/day11...day12)).

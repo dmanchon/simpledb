@@ -1,3 +1,6 @@
+# Day 9: Streaming Uncompressed Storage
+
+> **Day 9 Branch**: View the exact code for this day at [dmanchon/simpledb (`day9`)](https://github.com/dmanchon/simpledb/tree/day9) ([diff from `day8`](https://github.com/dmanchon/simpledb/compare/day8...day9)).
 
 As our analytical database scales up to processing billions of rows, keeping everything purely in memory is no longer an option. We must flush our in-memory column arrays to disk to create immutable historical blocks (often called "parts").
 
@@ -138,3 +141,97 @@ snprintf(bin_path, sizeof(bin_path), "%s/%s.bin", part_dir, col_name);
 `snprintf` allows you to format strings safely. By passing `sizeof(bin_path)`, you guarantee the standard library will *never* write more than 1024 bytes, completely eliminating the risk of a buffer overflow.
 
 This perfectly safe string handling, combined with our streamlined `.bin` writing logic, sets the stage perfectly for Sparse Primary Indexing in Day 10!
+
+---
+
+## 4. Unit Test & Day 9 Implementation (`src/storage.c`)
+
+```c
+// [tests/test_db.c]
+void test_column_writer(void) {
+    printf("Testing Column Writer...\n");
+    const char* test_dir = ".";
+    const char* col_name = "test_col";
+
+    column_writer_t* writer = column_writer_create(test_dir, col_name, COL_TYPE_I32);
+    assert(writer != NULL);
+    assert(writer->rows_written == 0);
+
+    size_t num_rows = 10000;
+    int32_t* data = malloc(num_rows * sizeof(int32_t));
+    for (size_t i = 0; i < num_rows; i++) {
+        data[i] = (int32_t)i;
+    }
+
+    column_writer_append(writer, data, 5000);
+    column_writer_append(writer, data + 5000, 5000);
+    assert(writer->rows_written == 10000);
+
+    column_writer_close(writer);
+    free(data);
+
+    FILE* fp = fopen("./test_col.bin", "rb");
+    assert(fp != NULL);
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fclose(fp);
+    assert(size == 40000);
+    remove("./test_col.bin");
+
+    printf("Column Writer tests passed!\n");
+}
+```
+
+```c
+// [src/storage.c]
+#include "simpledb/storage.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+column_writer_t* column_writer_create(const char* part_dir, const char* col_name, column_type_t type) {
+    if (!part_dir || !col_name) return NULL;
+
+    column_writer_t* w = malloc(sizeof(column_writer_t));
+    if (!w) return NULL;
+
+    w->column_name = strdup(col_name);
+    w->type = type;
+    w->rows_written = 0;
+
+    char bin_path[1024];
+    snprintf(bin_path, sizeof(bin_path), "%s/%s.bin", part_dir, col_name);
+
+    w->bin_fp = fopen(bin_path, "wb");
+    if (!w->bin_fp) {
+        free((void*)w->column_name);
+        free(w);
+        return NULL;
+    }
+
+    return w;
+}
+
+void column_writer_append(column_writer_t* writer, const void* data, size_t num_rows) {
+    if (!writer || !data || num_rows == 0) return;
+
+    size_t bytes_to_write = num_rows * 4;
+    if (fwrite(data, 1, bytes_to_write, writer->bin_fp) != bytes_to_write) {
+        fprintf(stderr, "[FATAL ERROR] Failed to write column data to disk\n");
+        exit(EXIT_FAILURE);
+    }
+
+    writer->rows_written += num_rows;
+}
+
+void column_writer_close(column_writer_t* writer) {
+    if (!writer) return;
+    if (writer->bin_fp) fclose(writer->bin_fp);
+    free((void*)writer->column_name);
+    free(writer);
+}
+```
+
+---
+
+> **Day 9 Branch**: View the exact code for this day at [dmanchon/simpledb (`day9`)](https://github.com/dmanchon/simpledb/tree/day9) ([diff from `day8`](https://github.com/dmanchon/simpledb/compare/day8...day9)).

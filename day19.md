@@ -1,5 +1,7 @@
 # Day 19: The MergeTree Part Compactor (Background Part Merging Engine)
 
+> **Day 19 Branch**: View the exact code for this day at [dmanchon/simpledb (`day19`)](https://github.com/dmanchon/simpledb/tree/day19) ([diff from `day18`](https://github.com/dmanchon/simpledb/compare/day18...day19)).
+
 > [!TIP]
 > **Long-Read Engineering Log (~1,215 lines) — TL;DR & Fast Navigation**
 > This post is an unabridged Socratic pair-programming log covering ClickHouse-style MergeTree part compaction and multi-threaded catalog concurrency in C11.
@@ -813,8 +815,8 @@ typedef struct {
     
     // Internal state tracking which parts are currently being merged
     size_t* part_ids_to_merge;
-    size_t num_parts;
     table_part_t** zombies;
+    size_t num_parts;
 } part_merger_t;
 
 // Initialize a part merger job for a table
@@ -822,7 +824,7 @@ part_merger_t* part_merger_create(table_t* table, merge_config_t config);
 
 // Execute the merge on the main thread (blocking). 
 // Returns the ID of the newly created consolidated part.
-// Returns 0 if no merge was necessary or an error occurred.
+// Returns (size_t)-1 if no merge was necessary or an error occurred.
 size_t part_merger_execute(part_merger_t* merger);
 
 // Free the merger job resources
@@ -836,6 +838,9 @@ void part_merger_destroy(part_merger_t* merger);
 // If the table needs compaction, it creates a merger and runs it.
 // This is called by the background thread.
 void* table_background_compactor_thread(void* arg);
+
+// Starts the compactor in a background pthread
+void table_start_background_compactor(table_t* table);
 ```
 
 ### `src/part_merger.c`
@@ -850,6 +855,7 @@ void* table_background_compactor_thread(void* arg);
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 typedef struct part_item {
     table_part_t *part;
@@ -954,7 +960,6 @@ static void stream_fetch_next_and_push(part_stream_t *stream, min_heap_t *heap, 
 }
 
 size_t part_merger_execute(part_merger_t *merger) {
-
     if (merger->num_parts == 0) {
         return 0; // Abort instantly!
     }
@@ -982,8 +987,22 @@ size_t part_merger_execute(part_merger_t *merger) {
         stream_fetch_next_and_push(&streams[i], heap, merger->table->schema->count);
     }
 
+    uint64_t new_min_block = UINT64_MAX;
+    uint64_t new_max_block = 0;
+    uint32_t max_level = 0;
+    for (size_t i = 0; i < merger->num_parts; i++) {
+        table_part_t *p = merger->table->parts[merger->part_ids_to_merge[i]];
+        if (p->min_block < new_min_block) new_min_block = p->min_block;
+        if (p->max_block > new_max_block) new_max_block = p->max_block;
+        if (p->level > max_level) max_level = p->level;
+    }
+    if (new_min_block == UINT64_MAX) new_min_block = 0;
+    uint32_t new_level = max_level + 1;
+
     char new_part_dir[256];
-    sprintf(new_part_dir, "%s/part_%ld", merger->table->name, (long)time(NULL));
+    table_part_format_name(new_part_dir, sizeof(new_part_dir), merger->table->name, new_min_block, new_max_block, new_level);
+    mkdir(merger->table->name, 0777);
+    mkdir(new_part_dir, 0777);
     column_writer_t **writers = malloc(sizeof(column_writer_t *) * merger->table->schema->count);
 
     for (size_t j = 0; j < merger->table->schema->count; j++) {
@@ -1026,6 +1045,9 @@ size_t part_merger_execute(part_merger_t *merger) {
     // atomic switch part
     table_part_t *new_part = malloc(sizeof(table_part_t));
     strcpy(new_part->part_path, new_part_dir);
+    new_part->min_block = new_min_block;
+    new_part->max_block = new_max_block;
+    new_part->level = new_level;
     atomic_init(&new_part->refcount, 0);
     // The new row count is just the sum of all the old parts you merged!
     new_part->row_count = 0;
@@ -1218,3 +1240,7 @@ build/tests/all_1_1_0
 build/tests/all_2_2_0
 build/tests/events_merge_test/all_1_2_1
 ```
+
+---
+
+> **Day 19 Branch**: View the exact code for this day at [dmanchon/simpledb (`day19`)](https://github.com/dmanchon/simpledb/tree/day19) ([diff from `day18`](https://github.com/dmanchon/simpledb/compare/day18...day19)).

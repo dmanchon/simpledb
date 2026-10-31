@@ -1,5 +1,7 @@
 # Day 20: Minimal SQL & Query Parser (Lexer, Recursive Descent & AST)
 
+> **Day 20 Branch**: View the exact code for this day at [dmanchon/simpledb (`day20`)](https://github.com/dmanchon/simpledb/tree/day20) ([diff from `day19`](https://github.com/dmanchon/simpledb/compare/day19...day20)).
+
 > [!TIP]
 > **Long-Read Engineering Log (~1,280 lines) — TL;DR & Fast Navigation**
 > This post is an unabridged Socratic pair-programming log covering our zero-dependency SQL Lexer, Recursive Descent Parser, and AST in C11.
@@ -1283,4 +1285,8 @@ bool sql_parser_parse(sql_parser_t *parser, ast_query_t *out_query) {
 ```
 
 With the parser verified and complete, we now have an expressive front-end that translates raw SQL strings into a structured `ast_query_t`. In **Day 21: The Interactive REPL CLI & Query Engine**, we take this AST and wire it into an interactive command-line interface, streaming NDJSON ingestion via `yyjson`, dynamic schema inference, and vectorized execution pipeline coordination!
+
+---
+
+> **Day 20 Branch**: View the exact code for this day at [dmanchon/simpledb (`day20`)](https://github.com/dmanchon/simpledb/tree/day20) ([diff from `day19`](https://github.com/dmanchon/simpledb/compare/day19...day20)).
 

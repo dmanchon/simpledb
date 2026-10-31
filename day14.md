@@ -1,5 +1,7 @@
 # Day 14: The Table Abstraction (Ingestion Layer)
 
+> **Day 14 Branch**: View the exact code for this day at [dmanchon/simpledb (`day14`)](https://github.com/dmanchon/simpledb/tree/day14) ([diff from `day13`](https://github.com/dmanchon/simpledb/compare/day13...day14)).
+
 > [!TIP]
 > **Long-Read Engineering Log (~685 lines) — TL;DR & Fast Navigation**
 > This post is an unabridged Socratic pair-programming log capturing the design of `table_t` and polymorphic columnar batch ingestion in C11.
@@ -690,3 +692,7 @@ void **table_get_active_buffer(table_t *table, size_t *out_row_count) {
     abort();
 }
 ```
+
+---
+
+> **Day 14 Branch**: View the exact code for this day at [dmanchon/simpledb (`day14`)](https://github.com/dmanchon/simpledb/tree/day14) ([diff from `day13`](https://github.com/dmanchon/simpledb/compare/day13...day14)).

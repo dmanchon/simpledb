@@ -1,5 +1,7 @@
 # Day 18: APL / K Vectorized Physical Execution Pipeline
 
+> **Day 18 Branch**: View the exact code for this day at [dmanchon/simpledb (`day18`)](https://github.com/dmanchon/simpledb/tree/day18) ([diff from `day17`](https://github.com/dmanchon/simpledb/compare/day17...day18)).
+
 > [!TIP]
 > **Long-Read Engineering Log (~790 lines) — TL;DR & Fast Navigation**
 > This post is an unabridged Socratic pair-programming log covering the design of our vectorized physical execution pipeline in C11.
@@ -795,3 +797,7 @@ void physical_operator_destroy(physical_operator_t *op) {
     free(op);
 }
 ```
+
+---
+
+> **Day 18 Branch**: View the exact code for this day at [dmanchon/simpledb (`day18`)](https://github.com/dmanchon/simpledb/tree/day18) ([diff from `day17`](https://github.com/dmanchon/simpledb/compare/day17...day18)).

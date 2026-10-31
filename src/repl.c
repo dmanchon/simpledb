@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <sys/_types/_ssize_t.h>
+#include <sys/types.h>
 
 #define BULK_CHUNK_SIZE 1024
 #define SCHEMA_SAMPLE_ROWS 10

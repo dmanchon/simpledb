@@ -1,3 +1,6 @@
+# Day 11: The Column Reader (Zero-Copy Data Loading)
+
+> **Day 11 Branch**: View the exact code for this day at [dmanchon/simpledb (`day11`)](https://github.com/dmanchon/simpledb/tree/day11) ([diff from `day10`](https://github.com/dmanchon/simpledb/compare/day10...day11)).
 
 Welcome to Day 11! Over the last two days, we built the **Write-Path** for our database. In Day 9, we built the `column_writer_t` to stream data into `.bin` files in 8,192-row chunks (Granules). In Day 10, we built the Sparse Primary Index to quickly prune those Granules, outputting a `bitmap_t` where a `1` means "Read this Granule" and a `0` means "Skip it."
 
@@ -72,10 +75,40 @@ Here is how you will implement this in `src/storage.c`:
 3. Calculate `total_granules`. Since every row is a 4-byte integer (for now), the math is simply: `mmap->size / (8192 * sizeof(int32_t))`. (Note: The last granule might not be completely full, so you should round up!)
 4. Store the `mask` pointer. (The reader doesn't own the mask, it just borrows it from the index!)
 
-### `column_reader_next_granule_i32`
+### `column_reader_create`, `column_reader_free`, and `column_reader_next_granule_i32`
 This is the heart of the engine. It is a pull-based iterator that aggressively skips masked Granules using the L1 cache, avoiding disk I/O, and yielding exactly one chunk at a time.
 
 ```c
+column_reader_t *column_reader_create(const char *part_dir, const char *col_name,
+                                      column_type_t type, const bitmap_t *mask) {
+    column_reader_t *reader = malloc(sizeof(column_reader_t));
+    if (!reader)
+        return NULL;
+
+    char bin_file_path[1024];
+    snprintf(bin_file_path, sizeof(bin_file_path), "%s/%s.bin", part_dir, col_name);
+
+    reader->mmap = mmap_file_open(bin_file_path);
+    if (!reader->mmap) {
+        free(reader);
+        return NULL;
+    }
+
+    reader->type = type;
+    reader->mask = mask;
+    reader->current_granule_idx = 0;
+    size_t bytes_per_granule = 8192 * sizeof(int32_t);
+    reader->total_granules = (reader->mmap->size + bytes_per_granule - 1) / bytes_per_granule;
+
+    return reader;
+}
+
+void column_reader_free(column_reader_t *reader) {
+    if (!reader) return;
+    mmap_file_close(reader->mmap);
+    free(reader);
+}
+
 slice_i32_t column_reader_next_granule_i32(column_reader_t *reader) {
     // 1. Skip over any masked-out granules using the bitmap
     while (reader->current_granule_idx < reader->total_granules && 
@@ -147,3 +180,7 @@ void test_column_reader(void) {
 ```
 
 This tiny system is exactly how massive analytical databases manage to scan terabytes of data without running out of RAM.
+
+---
+
+> **Day 11 Branch**: View the exact code for this day at [dmanchon/simpledb (`day11`)](https://github.com/dmanchon/simpledb/tree/day11) ([diff from `day10`](https://github.com/dmanchon/simpledb/compare/day10...day11)).

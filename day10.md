@@ -1,5 +1,6 @@
-
 # Day 10: ClickHouse-Style Sparse Primary Index
+
+> **Day 10 Branch**: View the exact code for this day at [dmanchon/simpledb (`day10`)](https://github.com/dmanchon/simpledb/tree/day10) ([diff from `day9`](https://github.com/dmanchon/simpledb/compare/day9...day10)).
 
 > [!TIP]
 > **Long-Read Engineering Log (~680 lines) — TL;DR & Fast Navigation**
@@ -279,7 +280,7 @@ With the Bitmap strategy in mind, we can draft the Read-Path data structures in 
 
 // The physical header written at the very beginning of every .idx file
 typedef struct {
-    uint32_t implementation detail;      // e.g., 0x5052494D ('P' 'R' 'I' 'M')
+    uint32_t magic;      // e.g., 0x5052494D ('P' 'R' 'I' 'M')
     uint32_t version;    // e.g., 1
     size_t num_marks;    // Number of 32-bit marks that follow this header
     int32_t min_val;     // Absolute minimum value for the entire part
@@ -362,9 +363,9 @@ void test_sparse_index_search(void) {
     
     sparse_index_t idx;
     idx.marks = mock_marks;
-    idx.num_marks = 4;
-    idx.min_val = 0;
-    idx.max_val = 3999; // Assume the max value in the part is 3999
+    idx.header.num_marks = 4;
+    idx.header.min_val = 0;
+    idx.header.max_val = 3999; // Assume the max value in the part is 3999
     
     // 2. Create a Bitmap mask to hold the results (4 granules = 1 byte needed)
     bitmap_t* mask = bitmap_create(1);
@@ -514,7 +515,7 @@ static void sparse_index_writer_close(index_writer_t *self) {
     sparse_index_file_header_t header = {.max_val = state->max_val,
                                          .min_val = state->min_val,
                                          .num_marks = state->num_marks,
-                                         .implementation detail = 0x5052494D,
+                                         .magic = 0x5052494D,
                                          .version = 1};
     fseek(state->idx_fp, 0, SEEK_SET);
     fwrite(&header, sizeof(sparse_index_file_header_t), 1, state->idx_fp);
@@ -587,7 +588,11 @@ sparse_index_t *sparse_index_load(const char *idx_file_path) {
         return NULL;
     }
 
-    fread(&idx->header, sizeof(sparse_index_file_header_t), 1, fp);
+    if (fread(&idx->header, sizeof(sparse_index_file_header_t), 1, fp) != 1) {
+        fclose(fp);
+        free(idx);
+        return NULL;
+    }
     if (idx->header.magic != 0x5052494D || idx->header.version != 1) {
         fclose(fp);
         free(idx);
@@ -603,7 +608,13 @@ sparse_index_t *sparse_index_load(const char *idx_file_path) {
             free(idx);
             return NULL;
         }
-        fread(idx->marks, sizeof(int32_t), idx->header.num_marks, fp);
+        if (fread(idx->marks, sizeof(int32_t), idx->header.num_marks, fp) !=
+            idx->header.num_marks) {
+            fclose(fp);
+            free(idx->marks);
+            free(idx);
+            return NULL;
+        }
     }
 
     fclose(fp);
@@ -685,3 +696,7 @@ void column_writer_attach_index(column_writer_t* writer, index_writer_t* index) 
     writer->indexes[writer->num_indexes++] = index;
 }
 ```
+
+---
+
+> **Day 10 Branch**: View the exact code for this day at [dmanchon/simpledb (`day10`)](https://github.com/dmanchon/simpledb/tree/day10) ([diff from `day9`](https://github.com/dmanchon/simpledb/compare/day9...day10)).

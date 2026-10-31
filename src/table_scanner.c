@@ -2,7 +2,6 @@
 #include "simpledb/slice.h"
 #include "simpledb/storage.h"
 #include "simpledb/table.h"
-#include <_abort.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>

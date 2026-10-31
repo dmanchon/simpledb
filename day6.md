@@ -1,3 +1,6 @@
+# Day 6: High Cardinality String Dictionaries
+
+> **Day 6 Branch**: View the exact code for this day at [dmanchon/simpledb (`day6`)](https://github.com/dmanchon/simpledb/tree/day6) ([diff from `day5`](https://github.com/dmanchon/simpledb/compare/day5...day6)).
 
 In analytical databases, string columns present a fundamental tension between representation cost and comparison speed. Storing raw variable-length strings in a column wastes memory bandwidth and makes comparison expensive. In `simpledb`, string columns are dictionary-encoded: each unique string is stored once in a compact table, and every row holds only a small integer key that references that table.
 
@@ -127,6 +130,42 @@ This visualization clearly separates the index (`hash_table`) from the data stor
 
 ```c
 // [src/string_dict.c]
+
+#include "simpledb/string_dict.h"
+#include <string.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+string_dict_t* string_dict_create(void) {
+    string_dict_t* dict = (string_dict_t*)malloc(sizeof(string_dict_t));
+    if (!dict) {
+        fprintf(stderr, "[FATAL ERROR] failed to allocate string_dict_t\n");
+        exit(EXIT_FAILURE);
+    }
+
+    dict->count = 0;
+    dict->strings = calloc(STRING_DICT_MAX_ENTRIES, sizeof(char*));
+    dict->hash_table = calloc(STRING_DICT_HASH_SLOTS, sizeof(uint32_t));
+
+    if (!dict->strings || !dict->hash_table) {
+        fprintf(stderr, "[FATAL ERROR] failed to allocate string_dict internal arrays\n");
+        exit(EXIT_FAILURE);
+    }
+
+    return dict;
+}
+
+void string_dict_free(string_dict_t *dict) {
+    if (!dict) return;
+
+    for (int32_t i = 0; i < dict->count; i++) {
+        free(dict->strings[i]);
+    }
+    free(dict->strings);
+    free(dict->hash_table);
+    free(dict);
+}
 
 static uint32_t string_dict_hash(const char* str) {
     // FNV-1a 32-bit hash
@@ -380,4 +419,4 @@ The `string_dict_t` built on Day 6 becomes a shared dependency across several su
 
 ---
 
-> **Source Code**: The full C11 codebase for this project is available on GitHub at [dmanchon/simpledb](https://github.com/dmanchon/simpledb).
+> **Day 6 Branch**: View the exact code for this day at [dmanchon/simpledb (`day6`)](https://github.com/dmanchon/simpledb/tree/day6) ([diff from `day5`](https://github.com/dmanchon/simpledb/compare/day5...day6)).

@@ -119,7 +119,11 @@ sparse_index_t *sparse_index_load(const char *idx_file_path) {
         return NULL;
     }
 
-    fread(&idx->header, sizeof(sparse_index_file_header_t), 1, fp);
+    if (fread(&idx->header, sizeof(sparse_index_file_header_t), 1, fp) != 1) {
+        fclose(fp);
+        free(idx);
+        return NULL;
+    }
     if (idx->header.magic != 0x5052494D || idx->header.version != 1) {
         fclose(fp);
         free(idx);
@@ -133,7 +137,12 @@ sparse_index_t *sparse_index_load(const char *idx_file_path) {
         return NULL;
     }
 
-    fread(idx->marks, sizeof(int32_t), idx->header.num_marks, fp);
+    if (fread(idx->marks, sizeof(int32_t), idx->header.num_marks, fp) != idx->header.num_marks) {
+        fclose(fp);
+        free(idx->marks);
+        free(idx);
+        return NULL;
+    }
 
     fclose(fp);
     return idx;

@@ -1,5 +1,7 @@
 # Day 21: The Interactive REPL & Write Path (Dynamic Schema Evolution & Streaming NDJSON Ingestion)
 
+> **Day 21 Branch**: View the exact code for this day at [dmanchon/simpledb (`day21`)](https://github.com/dmanchon/simpledb/tree/day21) ([diff from `day20`](https://github.com/dmanchon/simpledb/compare/day20...day21)).
+
 > [!TIP]
 > **Long-Read Engineering Log (~890 lines) — TL;DR & Fast Navigation**
 > This post is an unabridged Socratic pair-programming log capturing the architecture, C11 pointer mechanics, and edge cases encountered while building the interactive REPL and write path.
@@ -617,7 +619,7 @@ Below is the complete implementation of the Day 21 REPL write path, including dy
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/_types/_ssize_t.h>
+#include <sys/types.h>
 
 #define BULK_CHUNK_SIZE 1024
 #define SCHEMA_SAMPLE_ROWS 10
@@ -894,3 +896,7 @@ void repl_run(table_t *db) {
 ## 9. Next Up: Day 22 — The REPL Read Path & Query Planner
 
 With the write path, dynamic schema evolution, and streaming NDJSON ingestion complete, **Day 22** will build `repl_exec_select()`—our **Mini Query Planner** that binds logical `SELECT ... WHERE ... GROUP BY ...` ASTs into Day 18's vectorized physical execution pipeline!
+
+---
+
+> **Day 21 Branch**: View the exact code for this day at [dmanchon/simpledb (`day21`)](https://github.com/dmanchon/simpledb/tree/day21) ([diff from `day20`](https://github.com/dmanchon/simpledb/compare/day20...day21)).

@@ -1,5 +1,7 @@
 # Day 17: The Multi-Part Table Scanner (Lazy Data Loading & Granule Pruning)
 
+> **Day 17 Branch**: View the exact code for this day at [dmanchon/simpledb (`day17`)](https://github.com/dmanchon/simpledb/tree/day17) ([diff from `day16`](https://github.com/dmanchon/simpledb/compare/day16...day17)).
+
 ### Architectural Overview: The Abstraction Gap
 
 Over the past few days, we've built individual components for storage and reading:
@@ -199,7 +201,6 @@ For reference, here is the complete, final implementation of the Table Scanner.
 #include "simpledb/slice.h"
 #include "simpledb/storage.h"
 #include "simpledb/table.h"
-#include <_abort.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -241,7 +242,7 @@ block_t table_scanner_next(table_scanner_t *scanner) {
     }
 
     if (!scanner->finished_disk_parts) {
-        block_t block;
+        block_t block = {0};
         block.num_columns = scanner->num_columns;
         block.columns = malloc(sizeof(slice_i32_t) * scanner->num_columns);
 
@@ -271,12 +272,14 @@ block_t table_scanner_next(table_scanner_t *scanner) {
         if (scanner->table->row_count == 0)
             return (block_t){0};
 
-        block_t block;
+        block_t block = {0};
         block.num_columns = scanner->num_columns;
         block.columns = malloc(sizeof(slice_i32_t) * scanner->num_columns);
 
         for (size_t i = 0; i < scanner->num_columns; i++) {
-            block.columns[i] = buffer_i32_as_slice(scanner->table->column_buffers[i]);
+            int32_t col_idx =
+                schema_registry_get_column_index(scanner->table->schema, scanner->column_names[i]);
+            block.columns[i] = buffer_i32_as_slice(scanner->table->column_buffers[col_idx]);
             if (i == 0)
                 block.num_rows = scanner->table->row_count;
         }
@@ -300,3 +303,7 @@ void table_scanner_destroy(table_scanner_t *scanner) {
     free(scanner);
 }
 ```
+
+---
+
+> **Day 17 Branch**: View the exact code for this day at [dmanchon/simpledb (`day17`)](https://github.com/dmanchon/simpledb/tree/day17) ([diff from `day16`](https://github.com/dmanchon/simpledb/compare/day16...day17)).

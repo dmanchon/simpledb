@@ -1,5 +1,7 @@
 # Day 16: Partitioned Grace Hash Aggregation (Disk Spilling GROUP BY)
 
+> **Day 16 Branch**: View the exact code for this day at [dmanchon/simpledb (`day16`)](https://github.com/dmanchon/simpledb/tree/day16) ([diff from `day15`](https://github.com/dmanchon/simpledb/compare/day15...day16)).
+
 ### Architectural Overview: The `GROUP BY` Challenge
 
 In SQL analytics, `GROUP BY` is fundamental for answering "how many" or "how much" per category. For small cardinalities (e.g., grouping by 50 US states), the database can easily maintain a hash table in CPU caches (L2/L3) and perform ultra-fast in-memory aggregations.
@@ -307,10 +309,11 @@ Here is the complete, working implementation of our Grace Hash Aggregation opera
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/signal.h>
+#include <sys/stat.h>
 
 grace_hash_agg_t *grace_hash_agg_create(const char *temp_dir, size_t mem_limit_records,
                                         size_t num_partitions) {
-    grace_hash_agg_t *agg = malloc(sizeof(*agg));
+    grace_hash_agg_t *agg = calloc(1, sizeof(*agg));
 
     agg->in_mem_count = 0;
     agg->mem_limit_records = mem_limit_records;
@@ -327,7 +330,7 @@ grace_hash_agg_t *grace_hash_agg_create(const char *temp_dir, size_t mem_limit_r
         return NULL;
     }
 
-    agg->partition_files = malloc(sizeof(FILE *) * num_partitions);
+    agg->partition_files = calloc(sizeof(FILE *), num_partitions);
     if (!agg->partition_files) {
         free(agg->in_mem_buf);
         free(agg->partition_counts);
@@ -347,10 +350,13 @@ grace_hash_agg_t *grace_hash_agg_create(const char *temp_dir, size_t mem_limit_r
     for (size_t i = 0; i < num_partitions; i++) {
         agg->partition_paths[i] = flat_buffer + (i * 256);
         snprintf(agg->partition_paths[i], 256, "%s/part_%zu.bin", temp_dir, i);
+        remove(agg->partition_paths[i]);
     }
 
     agg->num_partitions = num_partitions;
     snprintf(agg->temp_dir, sizeof(agg->temp_dir), "%s", temp_dir);
+
+    mkdir(agg->temp_dir, 0755);
 
     return agg;
 }
@@ -384,7 +390,7 @@ int grace_hash_agg_push(grace_hash_agg_t *agg, const agg_input_record_t *records
                 uint32_t p = agg->in_mem_buf[j].group_key % agg->num_partitions;
                 if (agg->partition_files[p] == NULL) {
                     // new file
-                    agg->partition_files[p] = fopen(agg->partition_paths[p], "ab");
+                    agg->partition_files[p] = fopen(agg->partition_paths[p], "wb");
                     if (!agg->partition_files[p]) {
                         return -1;
                     }
@@ -403,7 +409,7 @@ int grace_hash_agg_finish(grace_hash_agg_t *agg) {
         uint32_t p = agg->in_mem_buf[j].group_key % agg->num_partitions;
         if (agg->partition_files[p] == NULL) {
             // new file
-            agg->partition_files[p] = fopen(agg->partition_paths[p], "ab");
+            agg->partition_files[p] = fopen(agg->partition_paths[p], "wb");
             if (!agg->partition_files[p]) {
                 return -1;
             }
@@ -435,10 +441,15 @@ bool grace_hash_agg_next(grace_hash_agg_t *agg, agg_output_record_t *out_record)
         agg->current_hash_table = NULL;
         agg->hash_table_size = 0;
         agg->hash_table_iter_idx = 0;
+        agg->hash_table_capacity = 0;
         // next partition
         agg_input_record_t in;
         agg->partition_files[agg->current_partition_idx] =
             fopen(agg->partition_paths[agg->current_partition_idx], "rb");
+        if (agg->partition_files[agg->current_partition_idx] == NULL) {
+            agg->current_partition_idx++;
+            continue;
+        }
         while (fread(&in, sizeof(in), 1, agg->partition_files[agg->current_partition_idx]) == 1) {
             bool exists = false;
             for (size_t i = 0; i < agg->hash_table_size; i++) {
@@ -463,11 +474,16 @@ bool grace_hash_agg_next(grace_hash_agg_t *agg, agg_output_record_t *out_record)
             }
         };
         fclose(agg->partition_files[agg->current_partition_idx]);
+        agg->partition_files[agg->current_partition_idx] = NULL;
+        remove(agg->partition_paths[agg->current_partition_idx]);
         agg->current_partition_idx++;
-
     }
 
     *out_record = agg->current_hash_table[agg->hash_table_iter_idx++];
     return true;
 }
 ```
+
+---
+
+> **Day 16 Branch**: View the exact code for this day at [dmanchon/simpledb (`day16`)](https://github.com/dmanchon/simpledb/tree/day16) ([diff from `day15`](https://github.com/dmanchon/simpledb/compare/day15...day16)).

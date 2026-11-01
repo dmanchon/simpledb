@@ -8,7 +8,8 @@
 typedef enum {
     OP_SCAN,
     OP_FILTER,
-    OP_AGGREGATE
+    OP_AGGREGATE,
+    OP_SCALAR_AGG
 } operator_type_t;
 
 // Forward declaration for the recursive tree structure
@@ -42,6 +43,12 @@ typedef struct {
     size_t agg_col_idx;
 } aggregate_operator_t;
 
+typedef struct {
+    size_t agg_col_idx;
+    bool finished;
+    int64_t total_sum;
+} scalar_agg_operator_t;
+
 // ---------------------------------------------------------
 // The Tagged Union representing a Node in the Plan
 // ---------------------------------------------------------
@@ -57,6 +64,7 @@ struct physical_operator_t {
         scan_operator_t scan;
         filter_operator_t filter;
         aggregate_operator_t aggregate;
+        scalar_agg_operator_t scalar_agg;
     };
 };
 

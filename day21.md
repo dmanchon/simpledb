@@ -7,7 +7,7 @@
 > This post is an unabridged Socratic pair-programming log capturing the architecture, C11 pointer mechanics, and edge cases encountered while building the interactive REPL and write path.
 > - **Dynamic Schema Evolution (`table_ensure_column`):** Registers newly discovered columns on the fly and immediately backfills existing in-memory rows (`table->row_count`) with default `0` or `""` so columnar arrays never become jagged.
 > - **Single-Row Point Inserts (`repl_exec_insert`):** Binds out-of-order SQL `INSERT INTO ... VALUES (...)` columns to physical schema indices in a single pass.
-> - **Streaming NDJSON Ingestion (`repl_exec_bulk_insert`):** Uses `yyjson` in two phases—an unconditional $N$-row union schema pre-scan (`rewind(fp)`) followed by bounded `1,024`-row chunked batch ingestion in $O(1)$ RAM.
+> - **Streaming NDJSON Ingestion (`repl_exec_bulk_insert`):** Uses `yyjson` in two phases—an unconditional N-row union schema pre-scan (`rewind(fp)`) followed by bounded `1,024`-row chunked batch ingestion in `O(1)` RAM.
 > - **Want to go straight to the code?** [Jump to the Unit Tests](#7-unit-testing-the-write-path-teststest_dbc) or [Jump to the Final C11 Implementation (`src/repl.c`)](#8-the-final-listing-srcreplc--write-path--repl-loop).
 
 Welcome to Day 21! Over the previous 20 days, we have built all the core components of a vectorized, columnar analytical database engine in C11:
@@ -63,7 +63,7 @@ At first glance, it might look like the REPL is just a simple while-loop printin
 ```
 
 1. **The Write Path (`repl_exec_insert`):** Translates SQL `INSERT` statements or streaming NDJSON records into columnar vectors and appends them to active RAM buffers using `table_insert_batch()`. When RAM buffers reach capacity (or when the user issues `.flush`), it flushes an immutable disk part directory (`all_1_1_0`, `all_2_2_0`, ...).
-2. **The Read Path (`repl_exec_select` + `exec_pipeline_run`):** Translates `ast_query_t` into a physical operator tree (`OP_SCAN` $\to$ `OP_FILTER` $\to$ `OP_AGGREGATE`). Day 18's vectorized engine executes the pipeline in batches of 1,024 rows and prints the result as an ASCII table.
+2. **The Read Path (`repl_exec_select` + `exec_pipeline_run`):** Translates `ast_query_t` into a physical operator tree (`OP_SCAN` -> `OP_FILTER` -> `OP_AGGREGATE`). Day 18's vectorized engine executes the pipeline in batches of 1,024 rows and prints the result as an ASCII table.
 3. **The Background Compactor:** Launches in a detached POSIX thread (`table_start_background_compactor`). While the main thread sits blocked waiting for user input on `stdin`, the compactor silently wakes up, discovers mergeable parts, merges them using our Day 19 K-way Min-Heap, and garbage-collects obsolete files.
 
 ---
@@ -235,14 +235,14 @@ When a user writes:
 INSERT INTO events (status, user_id) VALUES ('ACTIVE', 42);
 ```
 
-An intuitive first attempt might be an $O(\text{schema\_cols} \times \text{query\_cols})$ nested loop: for every column in the table, scan through the AST with `strcmp` to find the matching value. 
+An intuitive first attempt might be an `O(schema_cols x query_cols)` nested loop: for every column in the table, scan through the AST with `strcmp` to find the matching value. 
 
 That approach feels clunky because it does semantic binding backwards! In compiler and database architecture, the SQL AST yields a collection of **`(column_name, value)` tuples**. 
 
 Instead of searching backwards through strings, we perform **Semantic Binding**:
 1. Pre-calculate the maximum potential schema size: `(db->schema ? db->schema->count : 0) + ast->num_insert_cols`.
 2. Allocate temporary slot buffers sized to this upper bound.
-3. In a **single pass**, iterate through each `(col, val)` tuple, call `table_ensure_column()` to resolve or register its index `idx`, and immediately store the value into slot `idx` in $O(1)$!
+3. In a **single pass**, iterate through each `(col, val)` tuple, call `table_ensure_column()` to resolve or register its index `idx`, and immediately store the value into slot `idx` in `O(1)`!
 
 ```c
 static void repl_exec_insert(table_t *db, ast_query_t *ast) {
@@ -310,8 +310,8 @@ RFC 8259 JSON compliance requires handling escaped control sequences (`\n`, `\t`
 
 ### Monolithic JSON Arrays vs. Newline-Delimited JSON (NDJSON)
 In production analytics, large datasets are never formatted as a single massive array `[ {...}, {...} ]`:
-1. **$O(N)$ Memory Consumption:** A 50GB JSON array requires building a 50GB+ DOM tree in memory before the first row can be written to columnar storage.
-2. **$O(1)$ Bounded Memory with NDJSON:** **Newline-Delimited JSON (NDJSON / JSONEachRow)** stores one JSON object per line. Lines are streamed with `getline()`, decoded into columnar batches of 1,024 rows, and appended directly to RAM buffers. Memory usage remains bounded to a few kilobytes regardless of whether the file contains 1,000 or 1,000,000,000 rows!
+1. **`O(N)` Memory Consumption:** A 50GB JSON array requires building a 50GB+ DOM tree in memory before the first row can be written to columnar storage.
+2. **`O(1)` Bounded Memory with NDJSON:** **Newline-Delimited JSON (NDJSON / JSONEachRow)** stores one JSON object per line. Lines are streamed with `getline()`, decoded into columnar batches of 1,024 rows, and appended directly to RAM buffers. Memory usage remains bounded to a few kilobytes regardless of whether the file contains 1,000 or 1,000,000,000 rows!
 
 ### Vendoring `yyjson`
 We vendor **`yyjson`**, the fastest pure C99 JSON parser available:
@@ -326,7 +326,7 @@ A crucial question arises during file ingestion on a schema-less table: **how ma
    - We read line 1, parse with `yyjson_read()`, register every discovered key/type using `table_ensure_column()`, and `rewind(fp)`.
    - *Limitation (Sparse / Ragged JSON):* If row 1 only contains `{"user_id": 1, "status": "OK"}`, but row 2 adds optional fields `{"user_id": 2, "status": "OK", "latency": 45, "country": "US"}`, a 1-row peek misses `latency` and `country`.
 2. **N-Row Sampling (DuckDB's `read_json_auto` Model):**
-   - Modern analytical engines sample the first $N$ rows (e.g., 100 or 20,480 rows in DuckDB) in a quick pre-scan loop to compute the **union schema** of all observed keys and types, and then call `rewind(fp)`.
+   - Modern analytical engines sample the first N rows (e.g., 100 or 20,480 rows in DuckDB) in a quick pre-scan loop to compute the **union schema** of all observed keys and types, and then call `rewind(fp)`.
    - If an optional field only appears in 1% of rows, sampling 100 rows gives a much higher probability of capturing the full schema before allocating chunk buffers.
 
 #### The Four Primitives of Schema Inference
@@ -352,7 +352,7 @@ When a table is freshly created via `table_create()`, `db->schema` is `NULL`. At
 
    > [!NOTE]
    > **Why Don't We `free(k)` or `free(v)`?**
-   > Notice that `yyjson_val *k, *v` (and `root`) are never individually freed! Much like the **Arena Allocator** we built on Day 1, `yyjson_read()` allocates a single contiguous memory buffer inside `yyjson_doc` rather than calling `malloc()` for every key and value node. `k`, `v`, and `yyjson_get_str(k)` are merely interior pointers into `doc`'s arena. Calling `yyjson_doc_free(doc)` at the end of the line frees the entire DOM tree and all its strings in one $O(1)$ deallocation. Because those string pointers expire as soon as `yyjson_doc_free(doc)` runs, any string that outlives the current line (such as column names in `schema_registry_add_column` or string values in the chunk buffer) must be copied via `strncpy` or `strdup` before `yyjson_doc_free(doc)`.
+   > Notice that `yyjson_val *k, *v` (and `root`) are never individually freed! Much like the **Arena Allocator** we built on Day 1, `yyjson_read()` allocates a single contiguous memory buffer inside `yyjson_doc` rather than calling `malloc()` for every key and value node. `k`, `v`, and `yyjson_get_str(k)` are merely interior pointers into `doc`'s arena. Calling `yyjson_doc_free(doc)` at the end of the line frees the entire DOM tree and all its strings in one `O(1)` deallocation. Because those string pointers expire as soon as `yyjson_doc_free(doc)` runs, any string that outlives the current line (such as column names in `schema_registry_add_column` or string values in the chunk buffer) must be copied via `strncpy` or `strdup` before `yyjson_doc_free(doc)`.
 
 4. **Stream Reset (`rewind`):**
    Because the sampling loop advances the `FILE *fp` cursor forward, calling `rewind(fp)` resets the file offset back to byte `0` so the main ingestion loop reads from the very first record.
@@ -366,7 +366,7 @@ To achieve high throughput without memory exhaustion, NDJSON ingestion follows a
    - Why run the pre-scan unconditionally? If a table already has 3 columns (`user_id`, `status`, `amount`) and 2 rows in RAM, and an incoming NDJSON file introduces a 4th column (`region`), running the pre-scan calls `table_ensure_column(db, "region", COL_TYPE_STRING)`, which registers the 4th column and immediately backfills the 2 existing rows before chunk buffers are allocated.
    - Once sampling concludes (or EOF is encountered), call `rewind(fp)` to reset the file stream offset back to 0.
 
-2. **Phase 2: Bounded Chunk Ingestion ($O(1)$ RAM Footprint)**
+2. **Phase 2: Bounded Chunk Ingestion (`O(1)` RAM Footprint)**
    - Allocate an array of column chunk buffers `void **col_data = calloc(num_cols, sizeof(void *));` for each active column in `db->schema`:
      - `int32_t *col_data[c]` of capacity `BULK_CHUNK_SIZE` (e.g. 1024 elements).
      - `char **col_data[c]` of capacity `BULK_CHUNK_SIZE` for string pointers.
@@ -388,7 +388,7 @@ First, note that `db->schema->columns` in `schema_registry_t` **is already** a d
 1. **Schema-Driven Loop (`column_id -> field_name` via `yyjson_obj_get`):**
    Iterate `for (size_t c = 0; c < num_cols; c++)` and call `yyjson_obj_get(root, db->schema->columns[c].name)`.
    - *Advantage:* Every column slot `col_data[c][chunk_rows]` is visited and populated in one loop (either with the JSON value or the default `0` / `strdup("")`), making it impossible to leave an uninitialized hole in a sparse row.
-   - *Trade-off:* Because `yyjson` objects are stored as flat key-value sequences rather than hash tables, `yyjson_obj_get(root, col_name)` performs a linear scan ($O(K)$) of the JSON object for each of the $C$ columns ($O(C \times K)$).
+   - *Trade-off:* Because `yyjson` objects are stored as flat key-value sequences rather than hash tables, `yyjson_obj_get(root, col_name)` performs a linear scan (`O(K)`) of the JSON object for each of the C columns (`O(C x K)`).
 
 2. **JSON-Driven Loop (`field_name -> column_id` via `yyjson_obj_foreach`):**
    Just like our single-row `repl_exec_insert()`, we can invert the loop:
@@ -486,7 +486,7 @@ To support multi-row SQL inserts in pure C, three components must change:
 While transactional databases (PostgreSQL, MySQL) often receive multi-row `INSERT` statements, modern analytical engines (ClickHouse, Snowflake, DuckDB) strongly discourage them:
 - **String Parsing Bottleneck:** A 50MB SQL query with 100,000 tuples forces the lexer and parser to allocate and traverse millions of commas, parentheses, quotes, and string literals, exhausting CPU cycles and memory.
 - **Columnar Impedance:** Databases must transpose row tuples into columnar arrays on every single query.
-- **The Modern Solution:** Ingesting structured file streams (NDJSON, Parquet, Arrow) bypasses SQL parsing entirely, allowing SIMD or chunked JSON decoders to populate columnar buffers directly in bounded $O(1)$ RAM.
+- **The Modern Solution:** Ingesting structured file streams (NDJSON, Parquet, Arrow) bypasses SQL parsing entirely, allowing SIMD or chunked JSON decoders to populate columnar buffers directly in bounded `O(1)` RAM.
 
 To insert multiple rows via SQL statements in the unit tests, execute distinct `INSERT` statements:
 
@@ -594,7 +594,7 @@ When testing SQL commands that accept a file path string (`INSERT INTO ... FROM 
 - **Why ISO C `tmpfile()` Does Not Work Here:** `FILE *tmpfile(void)` creates an anonymous temporary file and immediately `unlink`s its directory entry so it auto-deletes on close. Because it has no visible path on the filesystem, you cannot pass a filename string to the SQL parser (`FROM '...'`) for `repl_exec_bulk_insert()` to open via `fopen()`.
 - **Why `tmpnam()` (Auto-Generated Path) Is Banned:** Standard C originally provided `char *tmpnam(char *s)` to automatically pick `/tmp` and generate a unique filename for you. However, because `tmpnam()` only returns a path string *without* opening the file, it suffers from a **TOCTOU (Time-Of-Check to Time-Of-Use) race condition**: between the moment `tmpnam()` checks that the path does not exist and the moment your code calls `fopen()`, another process can create a symlink at that path. Modern compilers and linkers actively emit security warnings if you call `tmpnam()`.
 - **How POSIX `mkstemp()` Solves Both (`XXXXXX` Template):**
-  In `char tmp_path[] = "/tmp/cdb_bulk_XXXXXX";`, the trailing `XXXXXX` is **not** a literal filename—it is a placeholder template that `mkstemp()` overwrites in-place with 6 cryptographically/pseudo-randomly generated alphanumeric characters ($62^6 \approx 56.8\text{ billion}$ combinations, e.g., `/tmp/cdb_bulk_q9Km2A`).
+  In `char tmp_path[] = "/tmp/cdb_bulk_XXXXXX";`, the trailing `XXXXXX` is **not** a literal filename—it is a placeholder template that `mkstemp()` overwrites in-place with 6 cryptographically/pseudo-randomly generated alphanumeric characters (62^6 ≈ 56.8 billion combinations, e.g., `/tmp/cdb_bulk_q9Km2A`).
   Because C functions only have a single return value, `mkstemp()` returns the atomically opened `int fd` (created with `O_CREAT | O_EXCL` so no race condition is possible) and mutates your `tmp_path` array in-place to hand back the generated path with zero heap allocations!
 
 > [!WARNING]

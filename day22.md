@@ -5,7 +5,7 @@
 > [!TIP]
 > **Long-Read Engineering Log — TL;DR & Fast Navigation**
 > This post is an unabridged Socratic pair-programming log capturing the architecture, C11 pointer mechanics, and paging edge cases encountered while building the REPL Read Path and Query Planner.
-> - **Bottom-Up Tree Accumulator (`repl_exec_select`):** Translates Day 20's logical `ast_query_t` into a physical operator tree (`OP_SCAN` $\to$ `OP_FILTER` $\to$ `OP_AGGREGATE`) and returns a `physical_operator_t *` cursor (`sqlite3_prepare` / `sqlite3_step` pattern).
+> - **Bottom-Up Tree Accumulator (`repl_exec_select`):** Translates Day 20's logical `ast_query_t` into a physical operator tree (`OP_SCAN` -> `OP_FILTER` -> `OP_AGGREGATE`) and returns a `physical_operator_t *` cursor (`sqlite3_prepare` / `sqlite3_step` pattern).
 > - **Projected Block Index vs. Table Schema Index:** Resolves `WHERE` and `GROUP BY` column names against the projected `column_names[]` array rather than the raw table schema to prevent out-of-bounds access on `block.columns[]`.
 > - **Three Multi-Page Execution Bug Fixes (`src/exec_pipeline.c`):** Handles empty filtered granules (`sel->size == 0`) without premature `EOF`, guards `OP_AGGREGATE` ingestion across multi-page output streams (`finished_ingestion`), and fixes the C11 short-circuit `&&` operand order at page boundary `8,192`.
 > - **Want to go straight to the code?** [Jump to the Multi-Page Unit Tests](#5-unit-testing-the-read-path-teststest_dbc) or [Jump to the Final C11 Implementation (`src/repl.c` & `src/exec_pipeline.c`)](#8-the-final-listing-srcreplc--srcexec_pipelinec).
@@ -72,8 +72,8 @@ A subtle architectural distinction arises when building the physical operator tr
 
 - **Table Schema Index (`db->schema`):** In the table's full schema (for example, our NDJSON bulk ingestion table from Day 21), `"user_id"` might be column `0`, `"status"` column `1`, `"amount"` column `2`, and `"region"` column `3`.
 - **Projected Scan Block Index (`block_t`):** Because Day 17's [`table_scanner_create(db, cols, num_cols)`](file:///Users/dmanchon/repos/cdb/src/table_scanner.c#L11-L25) only loads the *requested* columns (`cols`), if the query only touches `{"user_id", "amount"}`, the `block_t` emitted by `OP_SCAN` has only **2 columns**:
-  - `block.columns[0]` $\rightarrow$ `"user_id"` (scan index `0`)
-  - `block.columns[1]` $\rightarrow$ `"amount"` (scan index `1`)
+  - `block.columns[0]` -> `"user_id"` (scan index `0`)
+  - `block.columns[1]` -> `"amount"` (scan index `1`)
 
 > [!WARNING]
 > **Watch Out for Memory Buffer Indexing in `table_scanner_next`:**
@@ -230,7 +230,7 @@ Because both `filter_gt_i32` and `filter_lt_i32` produce sorted `selection_vecto
 | Layer | What Changes | Complexity |
 | :--- | :--- | :--- |
 | **1. Lexer & Parser (`sql_parser.h/.c`)** | Add `TOKEN_AND`, `TOKEN_OR`. Change `if (TOKEN_WHERE)` to a `while` loop that parses predicates while `current_token` is `TOKEN_AND` or `TOKEN_OR`, storing `bool_op_t` (`BOOL_AND` / `BOOL_OR`) in `ast_query_t`. | ~20 LOC |
-| **2. Selection Vector Set Algebra (`filter.c`)** | Because `selection_vector_t` stores strictly increasing row indices (`e.g. [1, 4, 9]` and `[4, 7, 9]`), two selection vectors can be combined using a two-pointer merge in $O(N)$ time:<br>• **`AND` (Intersection):** Emit indices present in *both* `sel_a` and `sel_b` (`[4, 9]`).<br>• **`OR` (Union):** Emit deduplicated indices present in *either* `sel_a` or `sel_b` (`[1, 4, 7, 9]`).<br>*(Alternatively, evaluate each predicate into a Day 6 `bitmap_t` and use `bitmap_and()` / `bitmap_or()`!)*. | ~25 LOC |
+| **2. Selection Vector Set Algebra (`filter.c`)** | Because `selection_vector_t` stores strictly increasing row indices (`e.g. [1, 4, 9]` and `[4, 7, 9]`), two selection vectors can be combined using a two-pointer merge in `O(N)` time:<br>• **`AND` (Intersection):** Emit indices present in *both* `sel_a` and `sel_b` (`[4, 9]`).<br>• **`OR` (Union):** Emit deduplicated indices present in *either* `sel_a` or `sel_b` (`[1, 4, 7, 9]`).<br>*(Alternatively, evaluate each predicate into a Day 6 `bitmap_t` and use `bitmap_and()` / `bitmap_or()`!)*. | ~25 LOC |
 | **3. Filter Operator (`exec_pipeline.h/.c`)** | Allow `OP_FILTER` (or stacked `OP_FILTER` nodes) to intersect/union the newly computed `sel` with the incoming `block.sel_vector` instead of overwriting it! | ~15 LOC |
 
 Even simpler: if you only need **`AND` chains** (`WHERE a > 10 AND b < 50`), you don't even need a separate `OP_BOOL` node! In `OP_FILTER`, if `block.sel_vector != NULL` (from a child `OP_FILTER`), intersecting the new `sel` with `block.sel_vector` (and freeing the old `block.sel_vector`) automatically makes any chain of `OP_FILTER -> OP_FILTER -> OP_SCAN` act as a logical **`AND`**!
@@ -243,7 +243,7 @@ Why should `repl_exec_select(table_t *db, ast_query_t *ast)` return **`physical_
    - If `repl_exec_select()` returned `void` and only `printf`d inside an internal loop, unit tests could not inspect the resulting `block_t` slices and `assert()` on their values.
    - If `repl_exec_select()` returned a single `block_t`, the caller could only ever read the first page (8,192 rows) of a multi-granule scan or high-cardinality aggregation, and the `physical_operator_t *root` tree would be leaked!
 2. **Clean Ownership & Cursor Exhaustion (Like `sqlite3_prepare_v2` + `sqlite3_step`):**
-   - `repl_exec_select(table_t *db, ast_query_t *ast)` acts strictly as the **Query Planner & Binder**: it translates `ast_query_t` into a `physical_operator_t *root` pipeline (`OP_SCAN` $\to$ `OP_FILTER` $\to$ `OP_AGGREGATE`) and returns `root` (or `NULL` on error).
+   - `repl_exec_select(table_t *db, ast_query_t *ast)` acts strictly as the **Query Planner & Binder**: it translates `ast_query_t` into a `physical_operator_t *root` pipeline (`OP_SCAN` -> `OP_FILTER` -> `OP_AGGREGATE`) and returns `root` (or `NULL` on error).
    - Whoever calls `repl_exec_select()`—whether `repl_run()` in the interactive CLI or `test_repl_read_path_execution()` in the test suite—owns the pipeline cursor, pulls pages via `exec_pipeline_run(pipeline)` until `block.num_rows == 0`, and then destroys the pipeline via `physical_operator_destroy(pipeline)`:
 
 ```c

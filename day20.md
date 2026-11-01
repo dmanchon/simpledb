@@ -52,19 +52,19 @@ In formal language theory (Noam Chomsky, 1956), formal grammars are classified i
 - **Type 2 (Context-Free Grammars):** Nested syntax (expressions like `((a + b) * c)` or SQL subqueries `SELECT * FROM (SELECT ...)`). They require a **Pushdown Automaton** (a state machine equipped with a stack).
 - **Type 1 (Context-Sensitive) & Type 0 (Unrestricted Turing-Complete):** Semantic validation, type checking, etc.
 
-Because tokens are strictly **Regular Languages**, separating the Lexer allows us to run an ultra-fast $O(N)$ linear scan over the raw characters with zero stack allocations, converting raw bytes into integer enums before the heavier syntax parser ever runs.
+Because tokens are strictly **Regular Languages**, separating the Lexer allows us to run an ultra-fast `O(N)` linear scan over the raw characters with zero stack allocations, converting raw bytes into integer enums before the heavier syntax parser ever runs.
 
 #### 2. The Theoretical Engine: Deterministic Finite Automata (DFA)
 Mathematically, any regular expression can be converted into a Non-Deterministic Finite Automaton (NFA) via **Thompson's Construction**, and then into a **Deterministic Finite Automaton (DFA)** via **Powerset Construction** (Subset Construction).
 A DFA is a 5-tuple:
-$$M = (Q, \Sigma, \delta, q_0, F)$$
-- $Q$: Finite set of states.
-- $\Sigma$: Alphabet (input bytes `0..255`).
-- $\delta: Q \times \Sigma \to Q$: Transition function.
-- $q_0 \in Q$: Start state.
-- $F \subseteq Q$: Set of accepting states (token emitted).
+`M = (Q, Σ, δ, q₀, F)`
+- Q: Finite set of states.
+- Σ: Alphabet (input bytes `0..255`).
+- `δ: Q × Σ -> Q`: Transition function.
+- `q₀ ∈ Q`: Start state.
+- `F ⊆ Q`: Set of accepting states (token emitted).
 
-In a DFA, there is **exactly one** transition for any given (state, input byte) pair. This mathematically guarantees that scanning $N$ characters takes strictly $O(N)$ operations with **zero backtracking**.
+In a DFA, there is **exactly one** transition for any given (state, input byte) pair. This mathematically guarantees that scanning N characters takes strictly `O(N)` operations with **zero backtracking**.
 
 #### 3. The Maximal Munch Rule (Longest Match)
 When scanning `>` vs `>=` or `SELECT` vs an identifier like `selection`, two regular expressions may match a prefix. Lexers universally implement **Maximal Munch**: the lexer greedily consumes characters as long as a valid transition exists, matching the longest possible prefix.
@@ -105,8 +105,8 @@ Instead of writing C code, you write a declarative specification file with a `.l
 ```
 
 When you build your project, the build system invokes the `flex` CLI tool:
-1. **Regex $\to$ NFA:** Flex parses your regular expressions and applies Thompson's Construction to build a single Non-Deterministic Finite Automaton.
-2. **NFA $\to$ DFA:** It converts the NFA into a Deterministic Finite Automaton using the Powerset/Subset Construction algorithm.
+1. **Regex -> NFA:** Flex parses your regular expressions and applies Thompson's Construction to build a single Non-Deterministic Finite Automaton.
+2. **NFA -> DFA:** It converts the NFA into a Deterministic Finite Automaton using the Powerset/Subset Construction algorithm.
 3. **Minimization:** It optimizes the number of states using Hopcroft's DFA minimization algorithm.
 4. **Code Generation:** It emits a standalone C file, `lex.yy.c` (often 1,500 to 3,000 lines of dense C code), containing compressed 2D state transition tables:
    ```c
@@ -115,7 +115,7 @@ When you build your project, the build system invokes the `flex` CLI tool:
    ```
 
 ##### 2. Why Lex/Flex was Revolutionary
-In the 1970s and 1980s, hand-writing state machines was considered tedious and prone to subtle edge-case bugs. Flex guaranteed mathematical correctness: it proved your token set had no ambiguities and guaranteed strict $O(N)$ scanning with the Maximal Munch rule automatically. Paired with `yacc` / `bison`, it defined the standard Unix toolchain.
+In the 1970s and 1980s, hand-writing state machines was considered tedious and prone to subtle edge-case bugs. Flex guaranteed mathematical correctness: it proved your token set had no ambiguities and guaranteed strict `O(N)` scanning with the Maximal Munch rule automatically. Paired with `yacc` / `bison`, it defined the standard Unix toolchain.
 
 ##### 3. Why Modern Engines (SQLite, DuckDB, Clang) Abandoned Flex
 Despite its theoretical elegance, almost all modern compilers and database engines have moved away from Flex:
@@ -477,7 +477,7 @@ In **Option 3 (Hand-Written Dispatch)**, `sql_lexer_next_token(sql_lexer_t *lexe
      ```
      * **C Quirk: Why Does `int isdigit(int c)` Expect an `int`, Yet Require `(unsigned char)c`?**
        1. **Why the signature takes `int`:** `isdigit(int c)` was designed to accept the return value of `fgetc()` / `getchar()`, which returns any valid byte (`0..255`) **or** `EOF` (`-1`). Since `0..255` plus `-1` is **257 distinct values**, it cannot fit in a 1-byte `char` (which only holds 256 states), so the parameter type had to be `int`.
-       2. **Sign-Extension vs. Zero-Extension:** On x86 and ARM64 macOS, plain `char` is **signed** (`-128..127`). If `c` holds byte `0xE2` (which is `-30` as a signed `char`), passing `c` or `(int)c` performs **sign-extension** (`0xE2` $\to$ `int -30`). Inside libc, `isdigit(c)` indexes directly into a lookup array `(_ctype_ + 1)[c]`—so passing `-30` reads out-of-bounds memory 29 bytes *before* the table!
+       2. **Sign-Extension vs. Zero-Extension:** On x86 and ARM64 macOS, plain `char` is **signed** (`-128..127`). If `c` holds byte `0xE2` (which is `-30` as a signed `char`), passing `c` or `(int)c` performs **sign-extension** (`0xE2` -> `int -30`). Inside libc, `isdigit(c)` indexes directly into a lookup array `(_ctype_ + 1)[c]`—so passing `-30` reads out-of-bounds memory 29 bytes *before* the table!
        3. **What `(unsigned char)c` does:** Casting `(unsigned char)c` first reinterprets `0xE2` as `+226`, and C then automatically **zero-extends** that `unsigned char` to `int +226` to match the `int` parameter signature safely.
      * **What about Floats?** Even though our Day 20 AST (`ast_predicate_t` and `ast_value_t`) currently evaluates `int32_t int_val` for our integer/dictionary table columns, allowing the lexer to consume an optional `.` followed by digits (`3.14`) ensures the tokenizer emits a single `TOKEN_NUMBER("3.14")` instead of failing with `TOKEN_ERROR` on the decimal point! To support float predicates end-to-end in the AST, you would add `double float_val; bool is_float;` to `ast_predicate_t` and `ast_value_t` and parse with `strtod()`.
    - **4D. Words: Keywords & Identifiers (`isalpha((unsigned char)c) || c == '_'`):**
@@ -658,9 +658,9 @@ In Backus-Naur Form (BNF), the root grammar production of our SQL dialect is:
 In Recursive Descent, each grammar rule becomes a C function. Therefore, `sql_parser_parse()` is the **root function** representing `<query>`:
 1. **Sanitize Output:** It zeroes out `*out_query = (ast_query_t){0};` so no uninitialized stack garbage remains in unused AST fields.
 2. **Inspect the First Token (`current_token`):** Because `sql_parser_create()` already primed `current_token` with the very first token of the query string, `sql_parser_parse()` simply checks what keyword the query starts with:
-   - Starts with `TOKEN_SELECT` $\to$ hand off the `parser` and `out_query` pointers to `parse_select(parser, out_query)`.
-   - Starts with `TOKEN_INSERT` $\to$ hand off the `parser` and `out_query` pointers to `parse_insert(parser, out_query)`.
-   - Starts with anything else (e.g., `FROM` or a number) $\to$ invalid SQL statement, immediately return `false`.
+   - Starts with `TOKEN_SELECT` -> hand off the `parser` and `out_query` pointers to `parse_select(parser, out_query)`.
+   - Starts with `TOKEN_INSERT` -> hand off the `parser` and `out_query` pointers to `parse_insert(parser, out_query)`.
+   - Starts with anything else (e.g., `FROM` or a number) -> invalid SQL statement, immediately return `false`.
 
 ```c
 bool sql_parser_parse(sql_parser_t* parser, ast_query_t* out_query) {
@@ -779,7 +779,7 @@ Because SQL clauses always appear in this exact order, `sql_parser_parse_select`
      ```
 5. **Clause 5 — `ORDER BY` Clause (`ORDER BY <col> [ASC|DESC]` — Optional):**
    - Connects directly to our Day 4 `grade_up`/`grade_down` and Day 15 External Merge Sort!
-   - Also add `ORDER` $\to$ `TOKEN_ORDER`, `ASC` $\to$ `TOKEN_ASC`, and `DESC` $\to$ `TOKEN_DESC` to the lexer's keyword checks.
+   - Also add `ORDER` -> `TOKEN_ORDER`, `ASC` -> `TOKEN_ASC`, and `DESC` -> `TOKEN_DESC` to the lexer's keyword checks.
    - Check `if (parser->current_token.type == TOKEN_ORDER)`:
      ```c
      if (parser->current_token.type == TOKEN_ORDER) {

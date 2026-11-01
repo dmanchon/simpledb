@@ -17,7 +17,7 @@ To aggregate arbitrarily large datasets under a strict memory budget, we use **P
 Grace Hash Aggregation solves the unbounded memory problem by dividing it into two phases: **Partitioning** and **Aggregation**. 
 
 #### Phase 1: Partitioning (Spilling to Disk)
-As records stream in, we hash the `GROUP BY` key. We use this hash to assign the record to one of $P$ partitions (e.g., `hash(key) % P`).
+As records stream in, we hash the `GROUP BY` key. We use this hash to assign the record to one of P partitions (e.g., `hash(key) % P`).
 Instead of attempting to keep all unique groups in memory simultaneously, we maintain small memory buffers for each partition. When a partition's buffer fills up, it is spilled to disk as a temporary run. 
 This ensures that **records with the same group key always land in the same partition**, regardless of when they arrived!
 
@@ -43,7 +43,7 @@ Incoming Streaming Rows (Keys: 5, 2, 9, 5, 1, ...)
  Results     Results     Results
 ```
 
-By ensuring $P$ is large enough, each individual partition's unique groups will easily fit into the allocated memory limit, allowing `simpledb` to aggregate datasets infinitely larger than RAM without thrashing.
+By ensuring P is large enough, each individual partition's unique groups will easily fit into the allocated memory limit, allowing `simpledb` to aggregate datasets infinitely larger than RAM without thrashing.
 
 ---
 
@@ -211,7 +211,7 @@ Always perform your cleanup logic (closing files with `fclose`, deleting them wi
 
 **Q: Wait, do I *really* need to allocate every single string in a 2D string array?**
 Yes! This is a classic C memory concept. In Python or Java, strings are managed objects. But in C, `char **partition_paths` is just a "pointer to a pointer." 
-When you do `malloc(sizeof(char *) * num_partitions)`, you are only asking the OS for a block of memory to hold $N$ memory addresses. However, those addresses initially point to random garbage. If you try to run `snprintf(partition_paths[0], ...)` without allocating the inner string, C will attempt to write text to a garbage memory address and immediately trigger a **Segmentation Fault**. 
+When you do `malloc(sizeof(char *) * num_partitions)`, you are only asking the OS for a block of memory to hold N memory addresses. However, those addresses initially point to random garbage. If you try to run `snprintf(partition_paths[0], ...)` without allocating the inner string, C will attempt to write text to a garbage memory address and immediately trigger a **Segmentation Fault**. 
 You must explicitly tell C: "Here is the array of pointers, and by the way, make each pointer point to a brand new 256-byte block of memory where I can safely write my file path."
 
 **Q: Can we optimize this by allocating one giant flat buffer (`256 * num_partitions`) instead of calling `malloc` in a loop?**

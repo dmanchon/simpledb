@@ -20,9 +20,9 @@ Furthermore, because our storage is immutable, `DELETE` operations don't actuall
 To solve this, we need a background process that continuously monitors the number of parts. When it detects too many small parts, it triggers a **Merge**:
 
 1. **Physical Deletion**: It scans the parts, reading the `deletion_vector_t`. Any row marked as deleted is simply skipped and *not* written to the new merged part, reclaiming disk space.
-2. **Sorting and Merging**: It uses a $K$-way Min-Heap (similar to the external merge sort from Day 15) to efficiently interleave multiple sorted parts into one massive, contiguous, sorted part.
+2. **Sorting and Merging**: It uses a K-way Min-Heap (similar to the external merge sort from Day 15) to efficiently interleave multiple sorted parts into one massive, contiguous, sorted part.
 3. **Index Rebuilding**: As it writes the new consolidated part, it regenerates the `.mrk` mark files and the sparse `primary.idx` index from scratch, optimizing them for the new layout.
-4. **Atomic Swap**: Finally, it updates the table metadata, replacing the references to the $K$ small parts with a single reference to the new large part, and then asynchronously deletes the old small files.
+4. **Atomic Swap**: Finally, it updates the table metadata, replacing the references to the K small parts with a single reference to the new large part, and then asynchronously deletes the old small files.
 
 ## The Write Amplification Trade-off
 
@@ -293,11 +293,11 @@ Create `src/part_merger.c`. Start with the lifecycle functions:
 1. `part_merger_create`: `malloc` the `part_merger_t`. Assign `table` and `config`. Determine which parts to merge (e.g. read the catalog to select small parts) and store them in `part_ids_to_merge`.
 2. `part_merger_destroy`: Free `part_ids_to_merge` and the merger struct.
 
-### Step 3: Implement The $K$-way Merge (`part_merger_execute`)
+### Step 3: Implement The K-way Merge (`part_merger_execute`)
 
 This is the algorithmic core of the day. Inside `part_merger_execute`:
 1. **Initialize Readers**: For each part ID in `part_ids_to_merge`, initialize a `column_reader_t`. 
-2. **Min-Heap Setup**: We want to output a consolidated part that is strictly ordered by the primary key. Create a Min-Heap (priority queue) of size $K$ (where $K$ is the number of parts). The heap stores the "current" row from each part, sorted by the primary key value.
+2. **Min-Heap Setup**: We want to output a consolidated part that is strictly ordered by the primary key. Create a Min-Heap (priority queue) of size K (where K is the number of parts). The heap stores the "current" row from each part, sorted by the primary key value.
 3. **The Merge Loop**:
    - Pop the minimum row from the heap.
    - **Check Deletion Vector**: Check the `deletion_vector_t` (from Day 13) for this row's OID in its source part. If the bit is set (row deleted), *skip* it. Do not write it to the output buffer.
@@ -307,7 +307,7 @@ This is the algorithmic core of the day. Inside `part_merger_execute`:
 4. **Finalize**: Close all readers. Close all writers.
 5. **The Atomic Swap**: 
    - Take `pthread_rwlock_wrlock(&table->catalog_lock)`.
-   - Update `table->parts` to remove the old $K$ parts.
+   - Update `table->parts` to remove the old K parts.
    - Insert the newly created consolidated part.
    - Drop the lock `pthread_rwlock_unlock`.
 6. **Cleanup Zombies**: The old parts are now detached. You cannot delete their files immediately because active queries might be reading them. Start a deferred cleanup task (or just check periodically) that loops over the detached parts. When `atomic_load(&part->refcount) == 0`, it is safe to `unlink()` the files and `free(part)`.
@@ -453,8 +453,8 @@ static int part_comparator(const void *a, const void *b) {
 }
 ```
 
-#### 6. Scaffolding the $K$-Way Merge (`part_merger_execute`)
-Because `table_scanner_t` reads a table sequentially, we cannot use it for a $K$-way merge which requires reading multiple parts *simultaneously*. Instead, we must manage the `column_reader_t` instances manually. 
+#### 6. Scaffolding the K-Way Merge (`part_merger_execute`)
+Because `table_scanner_t` reads a table sequentially, we cannot use it for a K-way merge which requires reading multiple parts *simultaneously*. Instead, we must manage the `column_reader_t` instances manually. 
 
 A great pattern is to define a `part_stream_t` struct to keep track of each part's readers and current row state:
 
@@ -485,7 +485,7 @@ for (size_t i = 0; i < merger->num_parts; i++) {
 #### Understanding the Memory: `streams` vs `writers`
 A common point of confusion when scaffolding `part_merger_execute` is mixing up the readers and writers. You need two distinct arrays:
 
-1. **The Input `streams` (Readers):** An array of `part_stream_t` of size `merger->num_parts` ($K$). This represents the $K$ small parts you are actively pulling data from.
+1. **The Input `streams` (Readers):** An array of `part_stream_t` of size `merger->num_parts` (K). This represents the K small parts you are actively pulling data from.
    ```c
    part_stream_t *streams = malloc(sizeof(part_stream_t) * merger->num_parts);
    for (size_t i = 0; i < merger->num_parts; i++) {
@@ -495,7 +495,7 @@ A common point of confusion when scaffolding `part_merger_execute` is mixing up 
    }
    ```
 
-2. **The Output `writers`:** An array of `column_writer_t*` of size `table->schema->count`. Because compaction merges $K$ parts into **exactly one** new consolidated part, you only need one writer per column!
+2. **The Output `writers`:** An array of `column_writer_t*` of size `table->schema->count`. Because compaction merges K parts into **exactly one** new consolidated part, you only need one writer per column!
    ```c
    column_writer_t **writers = malloc(sizeof(column_writer_t*) * table->schema->count);
    for (size_t col = 0; col < table->schema->count; col++) {
@@ -713,7 +713,7 @@ C requires explicit cleanup. At the end of `part_merger_execute`, you must not o
 3. **Clean the Engine:** Free the `writers` array, the `streams` array, and call `min_heap_destroy(heap)`.
 
 #### 13. Garbage Collection & The Background Daemon
-Right now, `part_merger_execute` removes the old $K$ parts from the active catalog (`table->parts`), turning them into **Zombies**. However, it doesn't delete them from the hard drive!
+Right now, `part_merger_execute` removes the old K parts from the active catalog (`table->parts`), turning them into **Zombies**. However, it doesn't delete them from the hard drive!
 In a production database, a background daemon handles garbage collection. Since our compactor runs in its own background daemon thread anyway, we can do the garbage collection right inside the execution!
 
 **The Daemon Thread**

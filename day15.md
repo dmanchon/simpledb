@@ -6,7 +6,7 @@
 > **Long-Read Engineering Log (~3,040 lines) — TL;DR & Fast Navigation**
 > This post is our deepest Socratic systems log, capturing every C11 pointer nuance, tournament heap invariant, and file-descriptor edge case in out-of-core External Merge Sort.
 > - **Bounded-RAM Run Generation (`external_sorter_push`):** Buffers narrow 8-byte `(key, row_id)` pairs up to a strict byte budget, sorts them in-memory with `qsort`, and spills sorted run files (`run_0.tmp`, `run_1.tmp`, ...) to disk.
-> - **K-Way Min-Heap Tournament (`min_heap_t` + `external_sorter_next`):** Streams the head element of all $K$ spilled run files through a binary Min-Heap using `min_heap_replace_top()` in $O(N \log K)$ time and $O(K)$ memory.
+> - **K-Way Min-Heap Tournament (`min_heap_t` + `external_sorter_next`):** Streams the head element of all K spilled run files through a binary Min-Heap using `min_heap_replace_top()` in `O(N log K)` time and `O(K)` memory.
 > - **Want to go straight to the code?** [Jump to the Headers (`min_heap.h` & `external_sort.h`)](#standalone-c-header-includesimpledbmin_heaph), [Jump to the Unit Tests (`tests/test_db.c`)](#end-to-end-verification-teststest_dbc), or [Jump to the Final C11 Implementation (`src/min_heap.c` & `src/external_sort.c`)](#the-final-listing-complete-c-implementation).
 
 ### Architectural Overview: Why In-Memory Sorting Breaks Down

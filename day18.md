@@ -299,7 +299,7 @@ size_t num_children;
 ```
 
 Depending on the query, this structure takes different shapes:
-- **A Linked List:** For a simple query like `SCAN` $\rightarrow$ `FILTER` $\rightarrow$ `AGGREGATE`, every operator has exactly one child. Structurally, this looks like a linked list.
+- **A Linked List:** For a simple query like `SCAN` -> `FILTER` -> `AGGREGATE`, every operator has exactly one child. Structurally, this looks like a linked list.
 - **A Tree:** If you introduce an `OP_JOIN` operator (e.g., `SELECT * FROM A JOIN B`), the join operator needs to pull data from *two* different tables. Its `num_children` would be 2. The left child would be the pipeline for table A, and the right child would be the pipeline for table B. This is why the generic structure must be a tree.
 
 **Control Flow vs. Data Flow:**
@@ -312,7 +312,7 @@ Because the final, fully-processed result of the query eventually emerges from t
 
 Let's say our query is `SELECT user_id, SUM(amount) FROM events WHERE amount > 100 GROUP BY user_id`.
 
-The tree is: `Root(OP_AGGREGATE)` $\rightarrow$ `Child(OP_FILTER)` $\rightarrow$ `Child(OP_SCAN)`.
+The tree is: `Root(OP_AGGREGATE)` -> `Child(OP_FILTER)` -> `Child(OP_SCAN)`.
 
 ### Drafting the C Implementation
 
@@ -513,9 +513,9 @@ When you insert data into a Hash Bucket, you need the `group_key` and the `agg_v
 
 This means a transition from SoA (Columns) to AoS (Rows) is **unavoidable** when aggregating. 
 
-In DuckDB, they don't do a temporary `malloc` in the execution node. Instead, they pass the `block_t` directly into the Hash Aggregator, and the Aggregator does the SoA $\rightarrow$ AoS transition *internally* as it inserts the data directly into the Hash Buckets. 
+In DuckDB, they don't do a temporary `malloc` in the execution node. Instead, they pass the `block_t` directly into the Hash Aggregator, and the Aggregator does the SoA -> AoS transition *internally* as it inserts the data directly into the Hash Buckets. 
 
-Because we built our `grace_hash_agg_t` back on Day 10 using a simpler `agg_input_record_t` buffer, we are forced to do the SoA $\rightarrow$ AoS transition out here in `OP_AGGREGATE`. For this educational prototype, it is completely fine to leave it!
+Because we built our `grace_hash_agg_t` back on Day 10 using a simpler `agg_input_record_t` buffer, we are forced to do the SoA -> AoS transition out here in `OP_AGGREGATE`. For this educational prototype, it is completely fine to leave it!
 
 ### Socratic Review of your `OP_AGGREGATE` Draft (Round 2)
 

@@ -310,6 +310,24 @@ physical_operator_t *repl_exec_select(table_t *db, ast_query_t *ast) {
         op_agg->aggregate.group_by_col_idx = (size_t)group_col_id;
         op_agg->aggregate.agg_col_idx = (size_t)agg_col_id;
         root = op_agg;
+    } else {
+        int agg_col_id = -1;
+        for (size_t i = 0; i < ast->num_select_exprs; i++) {
+            if (ast->select_exprs[i].type == AST_AGG_SUM) {
+                agg_col_id = (int)i;
+                break;
+            }
+        }
+        if (agg_col_id != -1) {
+            physical_operator_t *op_scalar = calloc(sizeof(physical_operator_t), 1);
+            op_scalar->type = OP_SCALAR_AGG;
+            op_scalar->num_children = 1;
+            op_scalar->children = calloc(1, sizeof(physical_operator_t *));
+            op_scalar->children[0] = root;
+            op_scalar->scalar_agg.agg_col_idx = (size_t)agg_col_id;
+            op_scalar->scalar_agg.finished = false;
+            root = op_scalar;
+        }
     }
 
     return root;

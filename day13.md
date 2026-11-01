@@ -6,7 +6,7 @@
 > **Long-Read Engineering Log (~650 lines) — TL;DR & Fast Navigation**
 > This post is an unabridged Socratic pair-programming log capturing the architecture, bitwise arithmetic, and memory layout of Roaring-style Deletion Vectors in C11.
 > - **Why Deletion Vectors:** Columnar `.bin` files are immutable on disk; rewriting gigabytes of data to shift rows after a `DELETE` destroys write throughput. Instead, we record deleted `row_id`s in a separate bitset mask.
-> - **Roaring 2-Level Partitioning:** Splits 32-bit row IDs into a 16-bit high chunk key (`row_id >> 16`) and a 16-bit low offset (`row_id & 0xFFFF`), dynamically upgrading containers from sorted `uint16_t` arrays ($\le 4,096$ items) to $2^{16}$-bit bitmaps ($8\text{ KB}$).
+> - **Roaring 2-Level Partitioning:** Splits 32-bit row IDs into a 16-bit high chunk key (`row_id >> 16`) and a 16-bit low offset (`row_id & 0xFFFF`), dynamically upgrading containers from sorted `uint16_t` arrays (<= 4,096 items) to 65,536-bit bitmaps (8 KB).
 > - **Want to go straight to the code?** [Jump to the C Header (`deletion_vector.h`)](#1-the-c-header-deletion_vectorh), [Jump to the Unit Tests](#5-unit-tests), or [Jump to the Full C11 Implementation (`src/deletion_vector.c`)](#6-full-implementation-deletion_vectorc).
 
 
@@ -159,11 +159,11 @@ However, it means that during an insertion, **both arrays must be shifted in per
 
 ### 2.3 Why use Arrays instead of Trees? (Cache Locality)
 
-Academically, inserting a value into a sorted array requires an $O(N)$ memory shift, whereas inserting into a Binary Search Tree (BST) is $O(\log N)$. So why does this architecture use a flat array with `memmove`?
+Academically, inserting a value into a sorted array requires an `O(N)` memory shift, whereas inserting into a Binary Search Tree (BST) is `O(log N)`. So why does this architecture use a flat array with `memmove`?
 
 The answer is **CPU Cache Locality**. A sparse container caps out at exactly 4,096 `uint16_t` elements (8 Kilobytes). This entire structure fits effortlessly into the CPU's ultra-fast L1 cache. When we call `memmove` on an 8KB array, the C standard library (`libc`) uses heavily optimized SIMD vector instructions to shift the memory in nanoseconds. 
 
-If we used a Tree, every node would require left/right pointers (massive memory overhead), and traversing it would cause random memory jumps, resulting in catastrophic L2/L3 cache misses. In modern systems engineering, flat arrays with $O(N)$ `memmove` shifts consistently beat $O(\log N)$ Trees for small, bounded datasets strictly due to hardware mechanics!
+If we used a Tree, every node would require left/right pointers (massive memory overhead), and traversing it would cause random memory jumps, resulting in catastrophic L2/L3 cache misses. In modern systems engineering, flat arrays with `O(N)` `memmove` shifts consistently beat `O(log N)` Trees for small, bounded datasets strictly due to hardware mechanics!
 
 ### 2.4 Why Not Use `bitmap_t` for the Bitmap Container?
 
@@ -254,7 +254,7 @@ function add(row_id):
 
 - **`deletion_vector_add`**: This is the core ingestion logic for `DELETE` statements. Implementing this requires a strict 5-step C algorithm:
   1. **Bitwise Split**: Split the 32-bit `row_id` into a `high_key` (`row_id >> 16`) and `low_val` (`row_id & 0xFFFF`).
-  2. **Container Routing**: Search the `dv->keys` array for `high_key`. While a production engine uses Binary Search ($O(\log N)$) to handle thousands of chunks quickly, beware of the C standard library! You **cannot** easily use `bsearch()` from `<stdlib.h>` here because it returns `NULL` on a miss. We specifically require a "Lower Bound" binary search so that if the key is missing, the algorithm returns the exact index where the key *should* be inserted to maintain sorted order. For now, a simple Linear Search ($O(N)$) is a perfectly acceptable starting point.
+  2. **Container Routing**: Search the `dv->keys` array for `high_key`. While a production engine uses Binary Search (`O(log N)`) to handle thousands of chunks quickly, beware of the C standard library! You **cannot** easily use `bsearch()` from `<stdlib.h>` here because it returns `NULL` on a miss. We specifically require a "Lower Bound" binary search so that if the key is missing, the algorithm returns the exact index where the key *should* be inserted to maintain sorted order. For now, a simple Linear Search (`O(N)`) is a perfectly acceptable starting point.
   3. **Container Allocation (If Missing)**: 
      - If `dv->num_containers == dv->capacity`, `realloc` both `keys` and `containers` arrays to double their capacity. Check for OOM!
      - Use `memmove` (NOT `memcpy`) to safely shift all existing keys and pointers from the insertion index exactly one slot to the right. *Note: `memcpy` causes undefined behavior when source and destination buffers overlap, which is guaranteed to happen when shifting an array in-place!*
@@ -273,7 +273,7 @@ function add(row_id):
 
 - **`deletion_vector_get_simd_mask`**: This is the **Execution Engine Bridge**. Our SIMD `gather` and `filter` operations process data in 64-row batches (a 64-bit mask). This method looks at a `start_row` (which the engine guarantees is a multiple of 64), extracts exactly 64 bits worth of deletion statuses, and outputs a single `uint64_t`. 
   - *Example*: If `start_row = 64`, the function checks rows 64 through 127. If row 65 and row 67 are deleted, it returns a 64-bit integer where the 1st and 3rd bits are set to `1` (binary: `...00001010`).
-  - *Optimization*: Because `start_row` is aligned to a 64-row boundary, all 64 rows are mathematically guaranteed to live in the exact same container! You only need to route to the container once. Furthermore, if it is a `CONTAINER_BITMAP`, you can return the `uint64_t` directly from the bitmap array (`bitmap[low_key / 64]`) in a single $O(1)$ memory read. No loops required!
+  - *Optimization*: Because `start_row` is aligned to a 64-row boundary, all 64 rows are mathematically guaranteed to live in the exact same container! You only need to route to the container once. Furthermore, if it is a `CONTAINER_BITMAP`, you can return the `uint64_t` directly from the bitmap array (`bitmap[low_key / 64]`) in a single `O(1)` memory read. No loops required!
   - If it falls back to a `CONTAINER_ARRAY`, avoid looping 64 times and re-searching the array. Instead, iterate directly over the sparse array's `cardinality` to quickly extract the matching bits:
     ```c
     uint64_t out_mask = 0;

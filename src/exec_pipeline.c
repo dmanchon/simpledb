@@ -25,9 +25,6 @@ block_t exec_pipeline_run(physical_operator_t *root) {
                     records[i].group_key =
                         block.columns[root->aggregate.group_by_col_idx].data[physical_idx];
                 }
-                for (size_t k = 0; k < block.num_rows; k++) {
-                    fflush(stdout);
-                }
                 grace_hash_agg_push(root->aggregate.aggregator, records, block.num_rows);
                 free(records);
             }
@@ -84,7 +81,51 @@ block_t exec_pipeline_run(physical_operator_t *root) {
             return block;
         }
     }
+    case OP_SCALAR_AGG: {
+        if (root->scalar_agg.finished) {
+            return (block_t){0};
+        }
+        int64_t total = 0;
+        while (1) {
+            block_t block = exec_pipeline_run(root->children[0]);
+            if (block.num_rows == 0)
+                break;
+            const int32_t *data = block.columns[root->scalar_agg.agg_col_idx].data;
+            if (block.sel_vector) {
+                for (size_t i = 0; i < block.num_rows; i++) {
+                    total += data[block.sel_vector->data[i]];
+                }
+                selection_vector_free(block.sel_vector);
+            } else {
+                size_t i = 0;
+                int64_t s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+                for (; i + 3 < block.num_rows; i += 4) {
+                    s0 += data[i + 0];
+                    s1 += data[i + 1];
+                    s2 += data[i + 2];
+                    s3 += data[i + 3];
+                }
+                for (; i < block.num_rows; i++) {
+                    s0 += data[i];
+                }
+                total += s0 + s1 + s2 + s3;
+            }
+            free(block.columns);
+        }
+        root->scalar_agg.finished = true;
+        root->scalar_agg.total_sum = total;
+
+        block_t out_block = {0};
+        out_block.num_rows = 1;
+        out_block.num_columns = 1;
+        out_block.columns = malloc(sizeof(slice_i32_t));
+        int32_t *res_buf = malloc(sizeof(int32_t));
+        res_buf[0] = (int32_t)total;
+        out_block.columns[0] = slice_i32_create(res_buf, 1);
+        return out_block;
     }
+    }
+    return (block_t){0};
 }
 
 void physical_operator_destroy(physical_operator_t *op) {

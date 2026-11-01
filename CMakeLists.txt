@@ -36,6 +36,20 @@ if(NOT MSVC)
 endif()
 enable_project_warnings(bench_db)
 
+add_executable(bench_q1 benchmarks/bench_q1.c)
+target_link_libraries(bench_q1 PRIVATE simpledb_lib)
+if(NOT MSVC)
+    target_compile_options(bench_q1 PRIVATE -O3 -march=native -ffast-math)
+endif()
+enable_project_warnings(bench_q1)
+
+add_executable(bench_string_group_by benchmarks/bench_string_group_by.c)
+target_link_libraries(bench_string_group_by PRIVATE simpledb_lib)
+if(NOT MSVC)
+    target_compile_options(bench_string_group_by PRIVATE -O3 -march=native -ffast-math)
+endif()
+enable_project_warnings(bench_string_group_by)
+
 # Unit Testing
 enable_testing()
 add_subdirectory(tests)

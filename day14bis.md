@@ -101,8 +101,8 @@ Why wouldn't every OLAP engine use a WAL?
 
 | Feature | Row-Oriented WAL + Columnar Flush | Direct Part Flush (No WAL) |
 | :--- | :--- | :--- |
-| **Durability ($D$ in ACID)** | Immediate per-tuple durability. | Durability upon batch flush. |
-| **Write Amplification** | **High**: Data is written **twice** to disk (once to WAL, once to columnar `.bin`). | **Optimal ($1\times$)**: Data is written exactly once straight to columnar format. |
+| **Durability (D in ACID)** | Immediate per-tuple durability. | Durability upon batch flush. |
+| **Write Amplification** | **High**: Data is written **twice** to disk (once to WAL, once to columnar `.bin`). | **Optimal (1x)**: Data is written exactly once straight to columnar format. |
 | **Disk Bandwidth** | HALVED (saturates NVMe write bandwidth with redundant log I/O). | Maximized (100% of I/O bus is dedicated to columnar files). |
 | **Micro-Batches** | Safe for single-row inserts. | Requires in-memory buffering or client-side batching. |
 | **Recovery Complexity** | Requires WAL parser, log truncation, and crash replay logic. | Zero recovery logic: all completed parts on disk are already immutable and valid. |
@@ -780,7 +780,7 @@ To see the master blueprint of how all these pieces click together across our 20
 | **Day 14 & 14 Bis** | Table Ingestion & Flush (`table_t`) | Manages RAM insertion buffers, triggers immutable disk flushes, and exposes metadata getters (`table_get_parts`, `table_get_active_buffer`). *(Implemented)* |
 | **Day 15 & Day 16** | Out-of-Core Execution (`ORDER BY` & `GROUP BY`) | External Merge Sort and Partitioned Grace Hash Aggregation. |
 | **Day 17** | **The Multi-Part Table Scanner (`table_scanner_t`)** | **Dedicated Data Loading Day!** Unifies pulling lazily from `column_reader_t` across all immutable disk parts, pruning via `sparse_index`, and unioning live RAM buffers into 8,192-row `block_t` streams. |
-| **Day 18** | **Vectorized Physical Execution Pipeline (`exec_pipeline_t`)** | The compute engine: assembles `filter` (APL compress) $\rightarrow$ `gather` (late materialization) $\rightarrow$ `project` $\rightarrow$ `aggregate`. |
+| **Day 18** | **Vectorized Physical Execution Pipeline (`exec_pipeline_t`)** | The compute engine: assembles `filter` (APL compress) -> `gather` (late materialization) -> `project` -> `aggregate`. |
 | **Day 19** | **The MergeTree Part Compactor (`table_merge_parts`)** | Reusing Day 15's Min-Heap and Day 13's Deletion Vectors to merge multiple immutable disk parts into consolidated parts, rebuilding sparse indices. |
 | **Day 20** | **Minimal SQL Parser & REPL CLI Shell** | The user-facing shell: `db_open()` scans disk directories on boot, executes SQL queries against the pipeline, and displays formatted results in < 50ms! |
 
